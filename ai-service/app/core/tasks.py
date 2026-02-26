@@ -87,7 +87,9 @@ def generate_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             
             # Save to database
             logger.info("💾 Saving results to database...")
-            loop.run_until_complete(save_results_direct(request, result))
+            db_saved = loop.run_until_complete(save_results_direct(request, result))
+            if not db_saved:
+                logger.warning("⚠️ Database persistence failed", extra={"task_id": request.task_id})
             
             # Update task in Redis
             loop.run_until_complete(update_task_complete(request.task_id, result))
@@ -210,7 +212,7 @@ async def disconnect_services():
         logger.debug(f"PostgreSQL disconnect warning: {e}")
 
 
-async def save_results_direct(request: AIRequest, result: Dict[str, Any]):
+async def save_results_direct(request: AIRequest, result: Dict[str, Any]) -> bool:
     """
     Save generation results to database DIRECTLY.
     """
@@ -260,6 +262,7 @@ async def save_results_direct(request: AIRequest, result: Dict[str, Any]):
         )
         
         logger.info(f"💬 Conversation saved: {conversation_id}")
+        return True
         
     except Exception as e:
         logger.error(
@@ -271,6 +274,7 @@ async def save_results_direct(request: AIRequest, result: Dict[str, Any]):
             },
             exc_info=True
         )
+        return False
 
 
 async def update_task_complete(task_id: str, result: Dict[str, Any]):

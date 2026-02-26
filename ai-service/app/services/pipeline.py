@@ -159,6 +159,8 @@ class IntentAnalysisStage(PipelineStage):
         """Extract confidence values from object or dict"""
         if isinstance(confidence, dict):
             return {k: v for k, v in confidence.items() if isinstance(v, (int, float))}
+        if isinstance(confidence, (int, float)):
+            return {"overall": confidence}
         elif hasattr(confidence, '__dict__'):
             return {k: v for k, v in confidence.__dict__.items() if isinstance(v, (int, float))}
         return {}
@@ -231,6 +233,21 @@ class ContextBuildingStage(PipelineStage):
         if not intent:
             logger.warning("pipeline.context_building.no_intent")
             return {"skipped": True, "reason": "no_intent"}
+        
+        if isinstance(intent, dict):
+            intent_domain = intent.get('domain', 'unknown')
+            intent_complexity = intent.get('complexity', 'unknown')
+        else:
+            intent_domain = getattr(intent, 'domain', 'unknown')
+            intent_complexity = getattr(intent, 'complexity', 'unknown')
+
+        logger.info(
+            "pipeline.context_building.intent",
+            extra={
+                "domain": intent_domain,
+                "complexity": intent_complexity
+            }
+        )
         
         # Build enriched context
         enriched_context = await context_builder.build_context(

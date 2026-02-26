@@ -464,20 +464,19 @@ class LayoutGenerator:
                     primary_action = "text input"
                 
                 # Format prompt
+                screen_architecture_payload = self._sanitize_for_json({
+                    'id': screen.id,
+                    'name': screen.name,
+                    'purpose': screen.purpose
+                })
                 system_prompt, user_prompt = prompts.LAYOUT_GENERATE.format(
                     components=", ".join(self.available_components),
                     prompt=f"Layout for {screen.name}",
-                    screen_architecture=json.dumps({
-                        'id': screen.id,
-                        'name': screen.name,
-                        'purpose': screen.purpose
-                    }, indent=2),
+                    screen_architecture=json.dumps(screen_architecture_payload, indent=2),
                     required_components=", ".join(screen.components),
                     primary_action=primary_action
                 )
-
-                logger.error(type(user_prompt), user_prompt[:200])
-                
+                             
                 # Create messages
                 messages = [
                     LLMMessage(role="system", content=system_prompt),
@@ -1274,7 +1273,6 @@ def _dump_raw_llm_response(
     )
 
     return path
-
 
 # Global layout generator instance
 layout_generator = LayoutGenerator()
