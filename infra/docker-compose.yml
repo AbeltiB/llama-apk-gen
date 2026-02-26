@@ -1,0 +1,164 @@
+name: aiapk
+
+services:
+  # -------------------------
+  # Infrastructure Services
+  # -------------------------
+  postgres:
+    image: postgres:16-alpine
+    container_name: aiapk-postgres
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - aiapk-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: aiapk-redis
+    command: 
+      - redis-server 
+      - --requirepass 
+      - ${REDIS_PASSWORD} 
+      - --appendonly yes
+    ports:
+      - "127.0.0.1:${REDIS_PORT}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "--pass", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    networks:
+      - aiapk-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # -------------------------
+  # Application Services
+  # -------------------------
+  api:
+    build:
+      context: ../ai-service
+      dockerfile: Dockerfile
+    container_name: aiapk-api
+    env_file:
+      - .env
+      - ../ai-service/.env
+    ports:
+      - "${API_PORT}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - aiapk-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  celery-worker:
+    build:
+      context: ../ai-service
+      dockerfile: Dockerfile
+    container_name: aiapk-celery-worker
+    command: celery -A app.core.celery_app.celery_app worker -l info
+    env_file:
+      - .env
+      - ../ai-service/.env
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - aiapk-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  flower:
+    build:
+      context: ../ai-service
+      dockerfile: Dockerfile
+    container_name: aiapk-flower
+    command: celery -A app.core.celery_app.celery_app flower --port=5555
+    env_file:
+      - .env
+      - ../ai-service/.env
+    environment:
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD}@redis:6379/0
+    ports:
+      - "127.0.0.1:${FLOWER_PORT}:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - aiapk-network
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  aiapk-network:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
