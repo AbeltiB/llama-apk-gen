@@ -175,8 +175,9 @@ class Settings(BaseSettings):
     # -------------------------
     # COMPONENT LIBRARY
     # -------------------------
+    
     available_components: list[str] = get_available_components()
-
+    
     min_touch_target_size: int = 44
     default_font_family: str = "San Francisco, Roboto, sans-serif"
     default_font_size: int = 16

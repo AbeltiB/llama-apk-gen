@@ -12,7 +12,6 @@ from .core import (
 )
 from .component_catalog import get_available_components
 
-
 class ButtonProperties(BaseComponentProperties):
     """Button-specific properties"""
     onPress: Optional[PropertyValue] = Field(
@@ -133,7 +132,7 @@ class EnhancedComponentDefinition(BaseModel):
                 f"Unsupported component type: {v}. Allowed: {sorted(available)}"
             )
         return v
-
+    
     @field_validator('component_id')
     @classmethod
     def validate_component_id(cls, v: str) -> str:

@@ -44,7 +44,7 @@ class PromptLibrary:
     Collection of all prompt templates used by the AI service.
     ALL outputs MUST be strict JSON.
     """
-
+    
     AVAILABLE_COMPONENTS = get_available_components()
 
     # ======================================================================

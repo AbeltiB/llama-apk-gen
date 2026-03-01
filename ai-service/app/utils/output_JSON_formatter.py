@@ -27,7 +27,6 @@ from app.models.schemas.component_catalog import (
 
 logger = get_logger(__name__)
 
-
 # Component mapping and imports are sourced from the central component catalog.
 
 # Default style tokens for ideeza theme
@@ -455,7 +454,7 @@ def _generate_react_code(architecture: Dict, layouts: Dict, blockly: Dict, funct
             comp_type = comp.get('component_type', 'Text')
             for imp in get_component_imports(comp_type):
                 imports.add(f"import {{ {imp['name']} }} from '{imp['source']}';")
-    
+                
     # Build component JSX
     component_jsx = []
     for screen_id, layout in layouts.items():
