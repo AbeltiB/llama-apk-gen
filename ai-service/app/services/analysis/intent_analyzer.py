@@ -25,6 +25,7 @@ from app.services.analysis.intent_schemas import (
     ClassificationRequest,
 )
 from app.utils.logging import get_logger
+from app.models.schemas.component_catalog import get_template_components
 
 logger = get_logger(__name__)
 
@@ -301,7 +302,7 @@ Format:
     "safety_confidence": 1.0
   },
   "extracted_entities": {
-    "components": ["Button", "Text"],
+    "components": get_template_components("quiz"),
     "actions": ["click"],
     "data_types": ["counter"],
     "features": ["increment"]

@@ -23,6 +23,7 @@ from app.models.schemas import AIRequest
 from app.services.pipeline import default_pipeline
 from app.api.v1 import stats
 from app.api.v1 import results
+from app.api.v1 import components
 
 # Import new structured logging
 from app.utils.logging import get_logger, log_context
@@ -253,6 +254,13 @@ app.include_router(
     stats.router,
     prefix="/api/v1",
     tags=["Statistics"]
+)
+
+# Component catalog endpoints
+app.include_router(
+    components.router,
+    prefix="/api/v1",
+    tags=["Components"]
 )
 
 # Test routes (development only)

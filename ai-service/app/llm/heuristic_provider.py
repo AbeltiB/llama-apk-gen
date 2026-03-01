@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any
 from datetime import datetime
 
 from .base import BaseLLMProvider, LLMResponse, LLMMessage, LLMProvider
+from app.models.schemas.component_catalog import get_template_components
 
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class HeuristicProvider(BaseLLMProvider):
                     "id": "main_screen",
                     "name": "Counter",
                     "purpose": "Display counter value with increment and decrement buttons",
-                    "components": ["Text", "Button", "Button", "Button"],
+                    "components": get_template_components("timer"),
                     "navigation": []
                 }
             ],
@@ -262,7 +263,7 @@ class HeuristicProvider(BaseLLMProvider):
                     "id": "main_screen",
                     "name": "Main Screen",
                     "purpose": f"Main screen for: {message[:100]}",
-                    "components": ["Text", "Button", "InputText"],
+                    "components": get_template_components("generic"),
                     "navigation": []
                 }
             ],
@@ -299,7 +300,7 @@ class HeuristicProvider(BaseLLMProvider):
                     "id": "todo_screen",
                     "name": "Todo List",
                     "purpose": "Manage todo items with add, complete, edit, and delete functionality",
-                    "components": ["InputText", "Button", "Text", "Checkbox", "Button", "List"],
+                    "components": get_template_components("todo"),
                     "navigation": []
                 }
             ],
@@ -348,7 +349,7 @@ class HeuristicProvider(BaseLLMProvider):
                     "id": "weather_screen",
                     "name": "Weather",
                     "purpose": "Display current weather and forecast information",
-                    "components": ["Text", "Image", "List", "Button", "InputText"],
+                    "components": get_template_components("search"),
                     "navigation": []
                 }
             ],

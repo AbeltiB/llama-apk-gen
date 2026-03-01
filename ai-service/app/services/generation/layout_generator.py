@@ -14,6 +14,13 @@ from app.models.schemas.architecture import ArchitectureDesign, ScreenDefinition
 from app.models.schemas.components import EnhancedComponentDefinition
 from app.models.schemas.layout import EnhancedLayoutDefinition
 from app.models.schemas.core import PropertyValue
+from app.models.schemas.component_catalog import (
+    normalize_component_type,
+    get_component_default_dimensions,
+    get_component_default_properties,
+    has_component_event,
+    is_input_component,
+)
 from app.models.prompts import prompts
 from app.services.generation.layout_validator import layout_validator
 from app.llm.orchestrator import LLMOrchestrator
@@ -23,73 +30,7 @@ from app.utils.logging import get_logger, log_context, trace_async
 logger = get_logger(__name__)
 
 
-#  Component type aliases for normalization
-COMPONENT_TYPE_ALIASES = {
-    # Common LLM variations → Standard types
-    'text': 'Text',
-    'label': 'Text',
-    'textview': 'Text',
-    'textlabel': 'Text',
-    'textfield': 'Text',
-    
-    'button': 'Button',
-    'btn': 'Button',
-    'submitbutton': 'Button',
-    'actionbutton': 'Button',
-    
-    'input': 'InputText',
-    'textinput': 'InputText',
-    'inputtext': 'InputText',
-    'edittext': 'InputText',
-    'textentry': 'InputText',
-    
-    'textarea': 'TextArea',
-    'textareafield': 'TextArea',
-    'multilinetext': 'TextArea',
-    
-    'checkbox': 'Checkbox',
-    'check': 'Checkbox',
-    'checkbutton': 'Checkbox',
-    
-    'switch': 'Switch',
-    'toggle': 'Switch',
-    'toggleswitch': 'Switch',
-    
-    'slider': 'Slider',
-    'seekbar': 'Slider',
-    'range': 'Slider',
-    
-    'progressbar': 'ProgressBar',
-    'progress': 'ProgressBar',
-    'loadingbar': 'ProgressBar',
-    
-    'spinner': 'Spinner',
-    'loading': 'Spinner',
-    'loader': 'Spinner',
-    
-    'datepicker': 'DatePicker',
-    'date': 'DatePicker',
-    'datefield': 'DatePicker',
-    
-    'timepicker': 'TimePicker',
-    'time': 'TimePicker',
-    'timefield': 'TimePicker',
-    
-    'colorpicker': 'ColorPicker',
-    'color': 'ColorPicker',
-    'colorfield': 'ColorPicker',
-    
-    'joystick': 'Joystick',
-    'gamepad': 'Joystick',
-    
-    'map': 'Map',
-    'mapview': 'Map',
-    'googlemap': 'Map',
-    
-    'chart': 'Chart',
-    'graph': 'Chart',
-    'plot': 'Chart',
-}
+
 
 
 class LayoutGenerationError(Exception):
@@ -142,25 +83,6 @@ class LayoutGenerator:
         # ✅ Available components from settings
         self.available_components = settings.available_components
         
-        # Component sizing defaults (width, height)
-        self.component_defaults = {
-            'Button': (120, 44),
-            'InputText': (280, 44),
-            'Switch': (51, 31),
-            'Checkbox': (24, 24),
-            'TextArea': (280, 100),
-            'Slider': (280, 44),
-            'Spinner': (40, 40),
-            'Text': (280, 40),
-            'Joystick': (100, 100),
-            'ProgressBar': (280, 8),
-            'DatePicker': (280, 44),
-            'TimePicker': (280, 44),
-            'ColorPicker': (280, 44),
-            'Map': (340, 200),
-            'Chart': (340, 200)
-        }
-        
         # Retry configuration
         self.max_retries = 3
         self.retry_delay = 2
@@ -206,33 +128,16 @@ class LayoutGenerator:
         
         original = component_type
         normalized = component_type.strip()
-        
-        # Strategy 1: Direct match (case-sensitive)
-        if normalized in self.available_components:
-            return normalized
-        
-        # Strategy 2: Alias lookup (lowercase)
-        lowercase = normalized.lower()
-        if lowercase in COMPONENT_TYPE_ALIASES:
-            result = COMPONENT_TYPE_ALIASES[lowercase]
-            logger.debug(
-                "layout.component.alias_match",
-                extra={"original": original, "normalized": result}
-            )
+
+        resolved = normalize_component_type(normalized, fallback="Text")
+        if resolved != normalized:
             self.stats['components_normalized'] += 1
-            return result
-        
-        # Strategy 3: Case-insensitive match
-        for available in self.available_components:
-            if available.lower() == lowercase:
-                logger.debug(
-                    "layout.component.case_match",
-                    extra={"original": original, "matched": available}
-                )
-                self.stats['components_normalized'] += 1
-                return available
-        
-        # Strategy 4: Fuzzy matching (for typos)
+            logger.debug(
+                "layout.component.normalized",
+                extra={"original": original, "normalized": resolved}
+            )
+            return resolved
+
         matches = get_close_matches(
             normalized,
             self.available_components,
@@ -458,9 +363,9 @@ class LayoutGenerator:
                 
                 # Determine primary action
                 primary_action = "view content"
-                if any('Button' in comp for comp in screen.components):
+                if any(has_component_event(comp, 'onPress') for comp in screen.components):
                     primary_action = "button interaction"
-                elif any('Input' in comp for comp in screen.components):
+                elif any(is_input_component(comp) for comp in screen.components):
                     primary_action = "text input"
                 
                 # Format prompt
@@ -896,7 +801,7 @@ class LayoutGenerator:
                 constraints = comp_data.get('constraints', {})
                 
                 # Get default dimensions
-                width, height = self.component_defaults.get(comp_type, (280, 44))
+                width, height = get_component_default_dimensions(comp_type)
                 
                 # Calculate actual dimensions
                 width_value = constraints.get('width', width)
@@ -951,21 +856,10 @@ class LayoutGenerator:
                         sanitized_value = self._sanitize_for_json(value)
                         properties[key] = PropertyValue(type="literal", value=sanitized_value)
                 
-                # Ensure required properties exist
-                if comp_type == 'Checkbox' and 'checked' not in properties:
-                    properties['checked'] = PropertyValue(type="literal", value=False)
-                if comp_type == 'Switch' and 'checked' not in properties:
-                    properties['checked'] = PropertyValue(type="literal", value=False)
-                if comp_type == 'Slider' and 'value' not in properties:
-                    properties['value'] = PropertyValue(type="literal", value=50)
-                if comp_type == 'ProgressBar' and 'value' not in properties:
-                    properties['value'] = PropertyValue(type="literal", value=0.5)
-                if comp_type == 'Button' and 'value' not in properties:
-                    properties['value'] = PropertyValue(type="literal", value="Button")
-                if comp_type == 'Text' and 'value' not in properties:
-                    properties['value'] = PropertyValue(type="literal", value="Text")
-                if comp_type == 'InputText' and 'placeholder' not in properties:
-                    properties['placeholder'] = PropertyValue(type="literal", value="Enter text")
+                # Ensure required properties exist from centralized defaults
+                for prop_name, default_value in get_component_default_properties(comp_type).items():
+                    if prop_name not in properties:
+                        properties[prop_name] = PropertyValue(type="literal", value=default_value)
                 
                 # Get z-index
                 z_index = comp_data.get('z_index', idx)
@@ -1022,7 +916,7 @@ class LayoutGenerator:
                 )
                 continue
             
-            width, height = self.component_defaults.get(comp_type, (280, 44))
+            width, height = get_component_default_dimensions(comp_type)
             x = (self.canvas_width - width) // 2
             
             comp_id = f"{comp_type.lower()}_{idx}"
@@ -1040,44 +934,9 @@ class LayoutGenerator:
                 )
             }
             
-            # Add component-specific properties
-            if comp_type == 'Button':
-                properties['value'] = PropertyValue(type="literal", value="Click Me")
-                properties['onClick'] = PropertyValue(type="literal", value="")
-            elif comp_type == 'Text':
-                properties['value'] = PropertyValue(type="literal", value="Sample Text")
-                properties['color'] = PropertyValue(type="literal", value="#000000")
-            elif comp_type == 'InputText':
-                properties['placeholder'] = PropertyValue(type="literal", value="Enter text")
-                properties['value'] = PropertyValue(type="literal", value="")
-            elif comp_type == 'Checkbox':
-                properties['checked'] = PropertyValue(type="literal", value=False)
-                properties['label'] = PropertyValue(type="literal", value="Check me")
-            elif comp_type == 'Switch':
-                properties['checked'] = PropertyValue(type="literal", value=False)
-            elif comp_type == 'Slider':
-                properties['value'] = PropertyValue(type="literal", value=50)
-                properties['min'] = PropertyValue(type="literal", value=0)
-                properties['max'] = PropertyValue(type="literal", value=100)
-            elif comp_type == 'ProgressBar':
-                properties['value'] = PropertyValue(type="literal", value=0.5)
-                properties['max'] = PropertyValue(type="literal", value=1.0)
-            elif comp_type == 'TextArea':
-                properties['placeholder'] = PropertyValue(type="literal", value="Enter text here...")
-                properties['value'] = PropertyValue(type="literal", value="")
-            elif comp_type == 'Spinner':
-                properties['value'] = PropertyValue(type="literal", value=0)
-            elif comp_type == 'DatePicker':
-                properties['value'] = PropertyValue(type="literal", value="")
-            elif comp_type == 'TimePicker':
-                properties['value'] = PropertyValue(type="literal", value="")
-            elif comp_type == 'ColorPicker':
-                properties['value'] = PropertyValue(type="literal", value="#000000")
-            elif comp_type == 'Map':
-                properties['latitude'] = PropertyValue(type="literal", value=0.0)
-                properties['longitude'] = PropertyValue(type="literal", value=0.0)
-            elif comp_type == 'Chart':
-                properties['data'] = PropertyValue(type="literal", value=[])
+            # Add component-specific properties from centralized defaults
+            for prop_name, default_value in get_component_default_properties(comp_type).items():
+                properties[prop_name] = PropertyValue(type="literal", value=default_value)
             
             try:
                 component = EnhancedComponentDefinition(

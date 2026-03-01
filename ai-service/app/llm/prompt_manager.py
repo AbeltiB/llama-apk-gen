@@ -7,6 +7,7 @@ from typing import Dict, List, Any, Optional
 from enum import Enum
 
 from .base import LLMMessage
+from app.models.schemas.component_catalog import get_component_type_union_literal
 
 
 logger = logging.getLogger(__name__)
@@ -269,7 +270,8 @@ STRICT REQUIREMENTS:
 IMPORTANT: Return ONLY the JSON object, nothing else."""
     
     def _get_layout_v3(self) -> str:
-        return """IMPORTANT: You MUST respond with valid JSON only. Do NOT include any markdown, code blocks, explanations, or additional text.
+        component_types = get_component_type_union_literal()
+        return f"""IMPORTANT: You MUST respond with valid JSON only. Do NOT include any markdown, code blocks, explanations, or additional text.
 
 You are a senior UI/UX designer. Generate a detailed JSON structure for a mobile app layout.
 
@@ -286,7 +288,7 @@ STRICT REQUIREMENTS:
   "components": [
     {{
       "id": "string",
-      "type": "Text" | "Button" | "InputText" | "Image" | "List" | "Checkbox" | "Slider",
+      "type": {component_types},
       "properties": {{
         "value": "string",
         "fontSize": number,

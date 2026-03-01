@@ -14,6 +14,7 @@ import re
 from app.config import settings
 from app.models.schemas.architecture import ArchitectureDesign
 from app.models.schemas.layout import EnhancedLayoutDefinition
+from app.models.schemas.component_catalog import get_component_event
 from app.models.prompts import prompts
 from app.services.generation.blockly_validator import blockly_validator
 from app.llm.orchestrator import LLMOrchestrator
@@ -673,20 +674,13 @@ class BlocklyGenerator:
                 continue
                 
             for component in layout.components:
-                # Interactive components
-                if component.component_type in ['Button', 'Switch', 'Checkbox']:
+                event_name = get_component_event(component.component_type)
+                if event_name:
                     events.append({
                         'screen_id': screen_id,
                         'component_id': component.component_id,
                         'component_type': component.component_type,
-                        'event': 'onPress' if component.component_type == 'Button' else 'onToggle'
-                    })
-                elif component.component_type in ['InputText', 'TextArea']:
-                    events.append({
-                        'screen_id': screen_id,
-                        'component_id': component.component_id,
-                        'component_type': component.component_type,
-                        'event': 'onChange'
+                        'event': event_name,
                     })
         
         return events

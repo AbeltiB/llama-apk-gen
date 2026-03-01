@@ -9,6 +9,7 @@ from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from pydantic import Field, field_validator
 from dotenv import load_dotenv
+from app.models.schemas.component_catalog import get_available_components
 
 # Load .env first
 load_dotenv()
@@ -174,128 +175,7 @@ class Settings(BaseSettings):
     # -------------------------
     # COMPONENT LIBRARY
     # -------------------------
-    available_components: list[str] = [
-
-        # ========================
-        # CORE INPUTS
-        # ========================
-        "Button", "IconButton", "FloatingActionButton",
-        "InputText", "PasswordInput", "EmailInput", "PhoneInput",
-        "SearchBar", "TextArea",
-        "Switch", "Checkbox", "RadioButton", "RadioGroup",
-        "Slider", "RangeSlider", "Toggle", "ToggleSwitch"
-        "Stepper", "Rating", "PinInput", "OTPInput",
-
-        # ========================
-        # TEXT & DISPLAY
-        # ========================
-        "Text", "RichText", "MarkdownText",
-        "Label", "Badge", "Chip", "Tag",
-        "Tooltip", "HelperText",
-
-        # ========================
-        # MEDIA
-        # ========================
-        "Image", "Avatar", "Icon",
-        "Video", "VideoPlayer",
-        "Audio", "AudioPlayer",
-        "CameraPreview", "QRScanner",
-
-        # ========================
-        # LISTS & LAYOUT
-        # ========================
-        "List", "ListItem", "Grid", "GridItem",
-        "Card", "ExpandableCard",
-        "Divider", "Spacer",
-        "Row", "Column", "Stack",
-        "Wrap", "Container",
-        "SafeArea", "ScrollView",
-        "HorizontalScrollView", "VerticalScrollView",
-
-        # ========================
-        # NAVIGATION
-        # ========================
-        "AppBar", "TopBar",
-        "BottomNavigation", "BottomNavigationItem",
-        "TabView", "Tab", "TabBar",
-        "Drawer", "SideMenu",
-        "Breadcrumb",
-        "Pager", "Carousel",
-
-        # ========================
-        # MODALS & OVERLAYS
-        # ========================
-        "Modal", "BottomSheet", "ActionSheet",
-        "Dialog", "AlertDialog", "ConfirmDialog",
-        "Snackbar", "Toast", "Popover",
-        "LoadingOverlay",
-
-        # ========================
-        # FORMS
-        # ========================
-        "Form", "FormField", "FormSection",
-        "DatePicker", "TimePicker", "DateTimePicker",
-        "ColorPicker", "FilePicker", "ImagePicker",
-        "MultiSelect", "Dropdown",
-
-        # ========================
-        # FEEDBACK & STATUS
-        # ========================
-        "ProgressBar", "CircularProgress",
-        "Spinner", "SkeletonLoader",
-        "EmptyState", "ErrorState", "SuccessState",
-        "PullToRefresh",
-
-        # ========================
-        # MAPS & LOCATION
-        # ========================
-        "Map", "MapMarker", "MapPolyline",
-        "MapPolygon", "LocationPicker",
-
-        # ========================
-        # DATA VISUALIZATION
-        # ========================
-        "Chart", "LineChart", "BarChart",
-        "PieChart", "DonutChart",
-        "AreaChart", "ScatterChart",
-        "Gauge", "Timeline",
-
-        # ========================
-        # INTERACTION & GESTURES
-        # ========================
-        "SwipeView", "Dismissible",
-        "Draggable", "Droppable",
-        "LongPress", "PinchZoom",
-
-        # ========================
-        # SYSTEM & DEVICE
-        # ========================
-        "StatusBar", "KeyboardAvoider",
-        "HapticFeedback", "BiometricAuth",
-        "NotificationBanner",
-
-        # ========================
-        # AUTH & USER
-        # ========================
-        "LoginForm", "SignupForm",
-        "UserAvatar", "UserProfileHeader",
-
-        # ========================
-        # ADVANCED / SPECIALIZED
-        # ========================
-        "Calendar", "AgendaView",
-        "KanbanBoard", "TaskList",
-        "ChatBubble", "ChatInput",
-        "CommentList",
-        "CodeViewer",
-        "WebView",
-
-        # ========================
-        # GAMING / IOT (OPTIONAL)
-        # ========================
-        "Joystick", "Gamepad",
-        "ProgressRing",
-    ]
+    available_components: list[str] = get_available_components()
 
     min_touch_target_size: int = 44
     default_font_family: str = "San Francisco, Roboto, sans-serif"

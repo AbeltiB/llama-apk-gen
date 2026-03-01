@@ -12,6 +12,7 @@ from app.core.celery_app import celery_app
 from app.models.schemas.input_output import AIRequest
 from app.core.cache import cache_manager
 from app.core.database import db_manager
+from app.utils.output_JSON_formatter import format_pipeline_output
 
 
 @celery_app.task(
@@ -85,14 +86,17 @@ def generate_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
                 }
             )
             
-            # Save to database
+            # Save raw pipeline output to database for traceability
             logger.info("💾 Saving results to database...")
             db_saved = loop.run_until_complete(save_results_direct(request, result))
             if not db_saved:
                 logger.warning("⚠️ Database persistence failed", extra={"task_id": request.task_id})
+
+            # Build converted output for API consumers
+            formatted_result = format_pipeline_output(result)
             
             # Update task in Redis
-            loop.run_until_complete(update_task_complete(request.task_id, result))
+            loop.run_until_complete(update_task_complete(request.task_id, formatted_result, raw_result=result))
             
         except Exception as e:
             logger.error(
@@ -277,7 +281,7 @@ async def save_results_direct(request: AIRequest, result: Dict[str, Any]) -> boo
         return False
 
 
-async def update_task_complete(task_id: str, result: Dict[str, Any]):
+async def update_task_complete(task_id: str, result: Dict[str, Any], raw_result: Dict[str, Any] | None = None):
     """Update task status to complete in Redis"""
     try:
         # Get existing task data
@@ -297,6 +301,7 @@ async def update_task_complete(task_id: str, result: Dict[str, Any]):
             "progress": 100,
             "message": "Generation completed successfully",
             "result": result,
+            "raw_result": raw_result if raw_result is not None else result,
             "completed_at": time.time(),
             "cache_hit": metadata.get("cache_hit", False),
             "has_errors": len(metadata.get("errors", [])) > 0,

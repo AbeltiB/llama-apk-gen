@@ -37,6 +37,24 @@ from .components import (
     EnhancedComponentDefinition,
 )
 
+from .component_catalog import (
+    COMPONENT_DEFINITIONS,
+    get_available_components,
+    get_component_definition,
+    get_component_imports,
+    get_output_component_type,
+    export_component_catalog,
+    get_component_type_union_literal,
+    normalize_component_type,
+    get_component_default_dimensions,
+    get_component_default_properties,
+    get_component_event,
+    get_interactive_components,
+    get_template_components,
+    is_input_component,
+    has_component_event,
+)
+
 from .layout import (
     Position,
     LayoutConstraints,
@@ -94,6 +112,21 @@ __all__ = [
     'CheckboxProperties',
     'SliderProperties',
     'EnhancedComponentDefinition',
+    'COMPONENT_DEFINITIONS',
+    'get_available_components',
+    'get_component_definition',
+    'get_component_imports',
+    'get_output_component_type',
+    'export_component_catalog',
+    'get_component_type_union_literal',
+    'normalize_component_type',
+    'get_component_default_dimensions',
+    'get_component_default_properties',
+    'get_component_event',
+    'get_interactive_components',
+    'get_template_components',
+    'is_input_component',
+    'has_component_event',
     
     # Layout
     'Position',

@@ -9,6 +9,8 @@ from typing import Any, Tuple
 from dataclasses import dataclass
 from enum import Enum
 
+from app.models.schemas.component_catalog import get_available_components
+
 
 @dataclass
 class PromptTemplate:
@@ -43,20 +45,7 @@ class PromptLibrary:
     ALL outputs MUST be strict JSON.
     """
 
-    AVAILABLE_COMPONENTS = [
-        "Button", "IconButton", "FloatingActionButton",
-        "InputText", "PasswordInput", "EmailInput", "PhoneInput",
-        "SearchBar", "TextArea", "Text", "RichText",
-        "Switch", "Checkbox", "RadioButton", "RadioGroup",
-        "Slider", "ProgressBar", "Spinner",
-        "Image", "VideoPlayer", "AudioPlayer", "CameraPreview",
-        "List", "ListItem", "Grid", "Card",
-        "ScrollView", "TabView", "BottomNavigation",
-        "Modal", "Dialog", "Snackbar",
-        "DatePicker", "TimePicker", "ColorPicker",
-        "Map", "Chart", "LineChart", "BarChart",
-        "Joystick", "WebView"
-    ]
+    AVAILABLE_COMPONENTS = get_available_components()
 
     # ======================================================================
     # SHARED STRICT JSON RULES
