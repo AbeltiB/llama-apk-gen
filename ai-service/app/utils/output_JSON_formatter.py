@@ -20,51 +20,14 @@ import re
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 from app.utils.logging import get_logger
+from app.models.schemas.component_catalog import (
+    get_component_imports,
+    get_output_component_type,
+)
 
 logger = get_logger(__name__)
 
-
-# Component type mapping: pipeline type → ideeza component type
-COMPONENT_TYPE_MAP = {
-    "Text": "Text_Content",
-    "Button": "Button",
-    "InputText": "Input",
-    "TextArea": "TextArea",
-    "Switch": "Switch",
-    "Checkbox": "Checkbox",
-    "Slider": "Slider",
-    "ProgressBar": "ProgressBar",
-    "Spinner": "Spinner",
-    "DatePicker": "DatePicker",
-    "TimePicker": "TimePicker",
-    "ColorPicker": "ColorPicker",
-    "Joystick": "Joystick",
-    "Map": "Map",
-    "Chart": "Chart",
-}
-
-# Tamagui import mappings
-COMPONENT_IMPORTS = {
-    "Text_Content": [{"name": "Text", "source": "tamagui"}, {"name": "XStack", "source": "tamagui"}],
-    "Button": [{"name": "Button", "source": "tamagui"}],
-    "Input": [{"name": "Input", "source": "tamagui"}],
-    "TextArea": [{"name": "TextArea", "source": "tamagui"}],
-    "Switch": [
-        {"name": "Switch", "source": "tamagui"},
-        {"name": "Label", "source": "tamagui"},
-        {"name": "XStack", "source": "tamagui"}
-    ],
-    "Checkbox": [{"name": "Checkbox", "source": "tamagui"}, {"name": "Label", "source": "tamagui"}],
-    "Slider": [{"name": "Slider", "source": "tamagui"}],
-    "ProgressBar": [{"name": "Progress", "source": "tamagui"}],
-    "Spinner": [{"name": "Spinner", "source": "tamagui"}],
-    "DatePicker": [{"name": "DatePicker", "source": "tamagui"}],
-    "TimePicker": [{"name": "TimePicker", "source": "tamagui"}],
-    "ColorPicker": [{"name": "ColorPicker", "source": "tamagui"}],
-    "Joystick": [{"name": "Joystick", "source": "custom"}],
-    "Map": [{"name": "Map", "source": "react-native-maps"}],
-    "Chart": [{"name": "Chart", "source": "victory-native"}],
-}
+# Component mapping and imports are sourced from the central component catalog.
 
 # Default style tokens for ideeza theme
 STYLE_TOKENS = {
@@ -151,9 +114,10 @@ def _build_import_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any]:
         components = layout.get('components', [])
         for comp in components:
             comp_type = comp.get('component_type', 'Text')
-            ideeza_type = COMPONENT_TYPE_MAP.get(comp_type, comp_type)
-            if ideeza_type in COMPONENT_IMPORTS:
-                component_imports[ideeza_type] = COMPONENT_IMPORTS[ideeza_type]
+            ideeza_type = get_output_component_type(comp_type)
+            imports = get_component_imports(comp_type)
+            if imports:
+                component_imports[ideeza_type] = imports
     
     return {
         "globalImports": global_imports,
@@ -257,7 +221,7 @@ def _build_component_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any
                 continue
                 
             comp_type = comp.get('component_type', 'Text')
-            ideeza_type = COMPONENT_TYPE_MAP.get(comp_type, comp_type)
+            ideeza_type = get_output_component_type(comp_type)
             properties = comp.get('properties', {})
             
             # Build props with typed values
@@ -285,7 +249,7 @@ def _build_component_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any
                 "parentId": "root",
                 "screenId": screen_id,
                 "condition": "",
-                "requiredImports": COMPONENT_IMPORTS.get(ideeza_type, [])
+                "requiredImports": get_component_imports(comp_type)
             }
             
             components[comp_id] = component_entry
@@ -333,7 +297,7 @@ def _build_ui_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any]:
             comp_id = comp.get('component_id')
             if comp_id:
                 comp_type = comp.get('component_type', 'Text')
-                ideeza_type = COMPONENT_TYPE_MAP.get(comp_type, comp_type)
+                ideeza_type = get_output_component_type(comp_type)
                 properties = comp.get('properties', {})
                 
                 # Build props
@@ -354,7 +318,7 @@ def _build_ui_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any]:
                     "parentId": "root",
                     "screenId": screen_id,
                     "condition": "",
-                    "requiredImports": COMPONENT_IMPORTS.get(ideeza_type, [])
+                    "requiredImports": get_component_imports(comp_type)
                 })
     
     return {
@@ -488,18 +452,16 @@ def _generate_react_code(architecture: Dict, layouts: Dict, blockly: Dict, funct
     for screen_id, layout in layouts.items():
         for comp in layout.get('components', []):
             comp_type = comp.get('component_type', 'Text')
-            ideeza_type = COMPONENT_TYPE_MAP.get(comp_type, comp_type)
-            if ideeza_type in COMPONENT_IMPORTS:
-                for imp in COMPONENT_IMPORTS[ideeza_type]:
-                    imports.add(f"import {{ {imp['name']} }} from '{imp['source']}';")
-    
+            for imp in get_component_imports(comp_type):
+                imports.add(f"import {{ {imp['name']} }} from '{imp['source']}';")
+                
     # Build component JSX
     component_jsx = []
     for screen_id, layout in layouts.items():
         for comp in layout.get('components', []):
             comp_id = comp.get('component_id')
             comp_type = comp.get('component_type', 'Text')
-            ideeza_type = COMPONENT_TYPE_MAP.get(comp_type, comp_type)
+            ideeza_type = get_output_component_type(comp_type)
             properties = comp.get('properties', {})
             
             style_prop = properties.get('style', {})

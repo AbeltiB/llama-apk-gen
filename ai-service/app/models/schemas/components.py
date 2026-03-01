@@ -1,17 +1,16 @@
 """
 Component property schemas and enhanced component definitions.
 """
-from typing import List, Dict, Any, Optional, Literal, Type
+from typing import List, Dict, Any, Optional, Type
 from pydantic import BaseModel, Field, field_validator, model_validator
 import re
 
 from .core import (
     BaseComponentProperties,
     PropertyValue,
-    ComponentStyle,
     register_component_schema,
 )
-
+from .component_catalog import get_available_components
 
 class ButtonProperties(BaseComponentProperties):
     """Button-specific properties"""
@@ -113,11 +112,7 @@ register_component_schema("Slider", SliderProperties)
 class EnhancedComponentDefinition(BaseModel):
     """Enhanced component definition with strict validation"""
     component_id: str = Field(..., description="Unique component identifier")
-    component_type: Literal[
-        "Button", "InputText", "Switch", "Checkbox", "TextArea",
-        "Slider", "Spinner", "Text", "Joystick", "ProgressBar",
-        "DatePicker", "TimePicker", "ColorPicker", "Map", "Chart"
-    ]
+    component_type: str
     properties: Dict[str, PropertyValue]
     z_index: int = Field(default=0, ge=0, description="Layer order (higher = on top)")
     parent_id: Optional[str] = Field(default=None, description="Parent component ID")
@@ -126,6 +121,17 @@ class EnhancedComponentDefinition(BaseModel):
         default=None,
         description="Substitution metadata if component was replaced"
     )
+    
+    @field_validator('component_type')
+    @classmethod
+    def validate_component_type(cls, v: str) -> str:
+        """Ensure component type exists in the central catalog."""
+        available = set(get_available_components())
+        if v not in available:
+            raise ValueError(
+                f"Unsupported component type: {v}. Allowed: {sorted(available)}"
+            )
+        return v
     
     @field_validator('component_id')
     @classmethod
