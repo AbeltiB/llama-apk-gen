@@ -1,7 +1,7 @@
 """
 Enhanced Architecture Validator with Heuristic Awareness
 
-Validates architectures from both Claude and heuristic generators.
+Validates architectures from both Llama3 and heuristic generators.
 Provides detailed feedback with structured logging.
 """
 from typing import Dict, Any, List, Tuple, Optional
@@ -44,7 +44,7 @@ class ArchitectureValidator:
     """
     Comprehensive architecture validator.
     
-    Validates architectures from any source (Claude or heuristic).
+    Validates architectures from any source (llama3 or heuristic).
     Provides detailed feedback with actionable suggestions.
     
     Validation passes:
@@ -66,7 +66,7 @@ class ArchitectureValidator:
             'passed': 0,
             'failed': 0,
             'heuristic_validated': 0,
-            'claude_validated': 0
+            'llama3_validated': 0
         }
         
         logger.info(
@@ -86,7 +86,7 @@ class ArchitectureValidator:
         
         Args:
             architecture: Architecture to validate
-            source: Source of architecture ("claude" or "heuristic")
+            source: Source of architecture ("llama3" or "heuristic")
             
         Returns:
             Tuple of (is_valid, warnings_list)
@@ -97,8 +97,8 @@ class ArchitectureValidator:
         
         if source == "heuristic":
             self.stats['heuristic_validated'] += 1
-        elif source == "claude":
-            self.stats['claude_validated'] += 1
+        elif source == "llama3":
+            self.stats['llama3_validated'] += 1
         
         with log_context(operation="architecture_validation", source=source):
             logger.info(

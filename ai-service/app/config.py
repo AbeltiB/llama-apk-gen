@@ -85,19 +85,10 @@ class Settings(BaseSettings):
     user_prompt_path: str = "prompts/user"
 
     # -------------------------
-    # RABBITMQ
+    # CELERY + REDIS QUEUES
     # -------------------------
-    rabbitmq_url: str = "amqp://guest:guest@localhost:5672"
-    rabbitmq_host: str = "localhost"
-    rabbitmq_port: int = 5672
-    rabbitmq_user: str = "guest"
-    rabbitmq_password: str = "guest"
-    rabbitmq_queue_ai_requests: str = "ai-requests"
-    rabbitmq_queue_ai_responses: str = "ai-responses"
-    rabbitmq_queue_app_generation: str = "app-generation-queue"
-    rabbitmq_prefetch_count: int = 1
-    rabbitmq_heartbeat: int = 60
-    rabbitmq_connection_timeout: int = 10
+    celery_queue_generation: str = "generation"
+    celery_queue_default: str = "default"
 
     # -------------------------
     # REDIS
@@ -111,6 +102,7 @@ class Settings(BaseSettings):
     redis_semantic_cache_ttl: int = 604800
     redis_session_ttl: int = 28800
     redis_cache_similarity_threshold: float = 0.95
+    semantic_cache_enabled: bool = True
     redis_pool_size: int = 10
     redis_socket_timeout: int = 5
 

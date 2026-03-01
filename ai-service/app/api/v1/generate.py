@@ -11,11 +11,10 @@ import uuid
 from enum import Enum
 
 from app.models.schemas import AIRequest, PromptContext
-from app.core.messaging import queue_manager
 from app.core.cache import cache_manager
 from app.utils.logging import get_logger, log_context
 from app.utils.rate_limiter import rate_limiter
-from app.core.task_manager import task_manager
+from app.core.tasks import generate_task
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -158,7 +157,7 @@ async def generate_app(
     1. Validate request
     2. Check rate limits
     3. Create task ID and correlation ID
-    4. Publish to RabbitMQ
+    4. Enqueue Celery task on Redis broker
     5. Return task ID immediately
     """
     
@@ -259,7 +258,6 @@ async def generate_app(
                 socket_id=f"ws_{task_id}",
                 prompt=request.prompt,
                 context=PromptContext(**request.context) if request.context else None,
-                priority=request.priority,
                 timestamp=datetime.now(timezone.utc)
             )
             
@@ -287,56 +285,43 @@ async def generate_app(
                 }
             )
         
-        # Publish to RabbitMQ in background
-        async def publish_to_queue():
-            """Publish request to RabbitMQ queue"""
+        # Enqueue Celery task in background
+        async def enqueue_generation_task() -> None:
+            """Submit generation payload to Celery (Redis broker)."""
             try:
                 with log_context(
                     correlation_id=correlation_id,
                     task_id=task_id,
-                    operation="publish_to_queue"
+                    operation="enqueue_generation_task"
                 ):
-                    success = await queue_manager.publish_response(ai_request.dict())
-                    
-                    if success:
-                        logger.info(
-                            "api.queue.published",
-                            extra={
-                                "queue": "ai-requests",
-                                "task_id": task_id
-                            }
-                        )
-                        
-                        task_data["status"] = TaskStatus.PROCESSING
-                        task_data["message"] = "Request picked up by processor"
-                        task_data["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
-                        await cache_manager.set(f"task:{task_id}", task_data, ttl=86400)
-                    else:
-                        logger.error(
-                            "api.queue.publish_failed",
-                            extra={
-                                "queue": "ai-requests",
-                                "task_id": task_id
-                            }
-                        )
-                        
-                        task_data["status"] = TaskStatus.FAILED
-                        task_data["message"] = "Failed to publish to queue"
-                        task_data["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
-                        await cache_manager.set(f"task:{task_id}", task_data, ttl=86400)
-                        
+                    celery_task = generate_task.delay(ai_request.dict())
+                    logger.info(
+                        "api.celery.enqueued",
+                        extra={
+                            "celery_task_id": celery_task.id,
+                            "queue": "generation",
+                            "task_id": task_id,
+                        },
+                    )
+
+                    task_data["status"] = TaskStatus.PROCESSING
+                    task_data["message"] = "Request enqueued for processing"
+                    task_data["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+                    task_data["celery_task_id"] = celery_task.id
+                    await cache_manager.set(f"task:{task_id}", task_data, ttl=86400)
+
             except Exception as e:
                 logger.error(
-                    "api.queue.publish_error",
-                    extra={
-                        "queue": "ai-requests",
-                        "task_id": task_id,
-                        "error": str(e)
-                    },
-                    exc_info=True
+                    "api.celery.enqueue_failed",
+                    extra={"task_id": task_id, "error": str(e)},
+                    exc_info=True,
                 )
-        
-        background_tasks.add_task(publish_to_queue)
+                task_data["status"] = TaskStatus.FAILED
+                task_data["message"] = "Failed to enqueue generation task"
+                task_data["updated_at"] = datetime.now(timezone.utc).isoformat() + "Z"
+                await cache_manager.set(f"task:{task_id}", task_data, ttl=86400)
+
+        background_tasks.add_task(enqueue_generation_task)
         
         # Create response
         response = GenerateResponse(
@@ -423,20 +408,6 @@ async def cancel_task(task_id: str) -> CancelTaskResponse:
         
         await cache_manager.set(f"task:{task_id}", task_data, ttl=86400)
         
-        try:
-            await queue_manager.publish_response({
-                "type": "task_cancelled",
-                "task_id": task_id,
-                "timestamp": datetime.now(timezone.utc).isoformat() + "Z"
-            })
-        except Exception as e:
-            logger.warning(
-                "api.task.cancel_event_failed",
-                extra={
-                    "task_id": task_id,
-                    "error": str(e)
-                }
-            )
         
         logger.info(
             "api.task.cancelled",

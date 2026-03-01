@@ -141,7 +141,7 @@ class GenerationResult(BaseModel):
                     "generated_at": "2025-01-01T12:00:45Z",
                     "total_time_ms": 45000,
                     "cache_hit": False,
-                    "provider_used": "claude",
+                    "provider_used": "llama3",
                     "generation_method": "llm",
                     "validation_warnings": 0,
                     "substitutions_made": 0,

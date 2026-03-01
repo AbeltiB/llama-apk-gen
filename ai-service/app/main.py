@@ -6,7 +6,6 @@ New features:
 2. Enterprise structured logging with correlation tracking
 3. Multi-tier health checks (liveness, readiness, full)
 """
-import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
@@ -16,11 +15,8 @@ import uuid
 import time
 
 from app.config import settings
-from app.core.messaging import queue_manager
 from app.core.cache import cache_manager
 from app.core.database import db_manager
-from app.models.schemas import AIRequest
-from app.services.pipeline import default_pipeline
 from app.api.v1 import stats
 from app.api.v1 import results
 from app.api.v1 import components
@@ -54,14 +50,8 @@ async def lifespan(app: FastAPI):
             }
         )
         
-        # RabbitMQ
-        try:
-            await queue_manager.connect()
-            logger.info("app.startup.rabbitmq.connected")
-        except Exception as e:
-            logger.critical("app.startup.rabbitmq.failed", exc_info=e)
-            raise
-        
+        logger.info("app.startup.celery.mode", extra={"transport": "redis"})
+
         # Redis
         try:
             await cache_manager.connect()
@@ -78,10 +68,6 @@ async def lifespan(app: FastAPI):
             logger.critical("app.startup.postgresql.failed", exc_info=e)
             raise
         
-        # Start consumer
-        logger.info("app.startup.consumer.starting")
-        consumer_task = asyncio.create_task(consume_ai_requests())
-        
         logger.info(
             "app.startup.completed",
             extra={"status": "ready"}
@@ -92,15 +78,6 @@ async def lifespan(app: FastAPI):
         # Shutdown
         with log_context(correlation_id=str(uuid.uuid4()), operation="shutdown"):
             logger.info("app.shutdown.started")
-            
-            consumer_task.cancel()
-            try:
-                await consumer_task
-            except asyncio.CancelledError:
-                logger.info("app.shutdown.consumer.cancelled")
-            
-            await queue_manager.disconnect()
-            logger.info("app.shutdown.rabbitmq.disconnected")
             
             await cache_manager.disconnect()
             logger.info("app.shutdown.redis.disconnected")
@@ -271,93 +248,6 @@ if settings.debug:
         prefix="/api/v1",
         tags=["Testing"]
     )
-
-# ============================================================================
-# RABBITMQ CONSUMER
-# ============================================================================
-
-async def consume_ai_requests():
-    """Main consumer loop with structured logging"""
-    
-    logger.info(
-        "consumer.started",
-        extra={"queue": settings.rabbitmq_queue_ai_requests}
-    )
-    
-    async def message_handler(message_body: dict):
-        """Handle incoming AI request with correlation tracking"""
-        
-        try:
-            request = AIRequest(**message_body)
-            
-            # Set up logging context for entire request processing
-            with log_context(
-                correlation_id=str(uuid.uuid4()),
-                task_id=request.task_id,
-                user_id=request.user_id,
-                session_id=request.session_id
-            ):
-                logger.info(
-                    "consumer.message.received",
-                    extra={
-                        "prompt_length": len(request.prompt),
-                        "has_context": request.context is not None
-                    }
-                )
-                
-                # Send initial progress
-                await default_pipeline.send_progress(
-                    task_id=request.task_id,
-                    socket_id=request.socket_id,
-                    stage="analyzing",
-                    progress=5,
-                    message="Starting AI processing..."
-                )
-                
-                try:
-                    # Execute pipeline
-                    result = await default_pipeline.execute(request)
-                    
-                    logger.info(
-                        "consumer.message.completed",
-                        extra={
-                            "total_time_ms": result.get('total_time_ms', 0),
-                            "cache_hit": result.get('cache_hit', False)
-                        }
-                    )
-                    
-                except Exception as pipeline_error:
-                    logger.error(
-                        "consumer.pipeline.failed",
-                        exc_info=pipeline_error
-                    )
-                    
-                    await default_pipeline.send_error(
-                        task_id=request.task_id,
-                        socket_id=request.socket_id,
-                        error="Pipeline execution failed",
-                        details=str(pipeline_error)
-                    )
-        
-        except Exception as e:
-            logger.error(
-                "consumer.message.processing_failed",
-                extra={"error_type": type(e).__name__},
-                exc_info=e
-            )
-    
-    try:
-        await queue_manager.consume(
-            queue_name=settings.rabbitmq_queue_ai_requests,
-            callback=message_handler
-        )
-    except Exception as e:
-        logger.critical(
-            "consumer.failed",
-            exc_info=e
-        )
-        raise
-
 
 # ============================================================================
 # ROOT ENDPOINT

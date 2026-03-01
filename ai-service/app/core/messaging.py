@@ -2,7 +2,7 @@
 Messaging abstraction for async message handling.
 
 Public API remains stable while backend implementation
-can be swapped (Celery, RabbitMQ, etc).
+is implemented by Celery over Redis in this service.
 """
 from typing import Dict, Any, Callable
 from loguru import logger
@@ -14,7 +14,7 @@ class QueueManager:
     """
     Manages async messaging operations.
 
-    Backend-agnostic adapter.
+    Celery adapter wrapper.
     """
 
     def __init__(self):

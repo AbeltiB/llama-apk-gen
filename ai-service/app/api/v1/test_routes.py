@@ -11,7 +11,7 @@ import json
 
 from app.config import settings
 from app.models.schemas import AIRequest
-from app.core.messaging import queue_manager
+from app.core.tasks import generate_task
 from app.services.analysis.intent_analyzer import intent_analyzer
 from app.services.generation.architecture_generator import architecture_generator
 from app.services.generation.layout_generator import layout_generator
@@ -57,14 +57,14 @@ async def test_prompt(
     background_tasks: BackgroundTasks
 ):
     """
-    Test a prompt by sending it through RabbitMQ.
+    Test a prompt by enqueueing a Celery task.
     
     This simulates the complete flow:
     1. Receives prompt
-    2. Sends to RabbitMQ ai-requests queue
+    2. Enqueues payload to Celery generation queue
     3. Returns task ID for tracking
     
-    Check logs and RabbitMQ management UI to see processing.
+    Check logs and Celery worker output to see processing.
     """
     
     # Create AI request
@@ -76,13 +76,12 @@ async def test_prompt(
         context=request.context
     )
     
-    # Send to RabbitMQ (in background to return quickly)
+        # Enqueue Celery task (in background to return quickly)
     def send_to_queue():
-        import asyncio
-        asyncio.run(queue_manager.publish_response({
+        generate_task.delay({
             **ai_request.dict(),
             "test_mode": True
-        }))
+        })
     
     background_tasks.add_task(send_to_queue)
     
@@ -92,8 +91,8 @@ async def test_prompt(
         "message": "Request sent to processing queue",
         "check": {
             "logs": "Check AI service logs for processing details",
-            "rabbitmq": f"http://localhost:15672 (admin/password)",
-            "queue": "ai-responses"
+            "celery": "worker logs",
+            "queue": "generation"
         },
         "request": {
             "user_id": ai_request.user_id,
@@ -262,7 +261,7 @@ async def get_test_stats():
 @router.post("/test/complete")
 async def test_complete_flow(request: TestPromptRequest):
     """
-    Test complete flow synchronously (no RabbitMQ).
+    Test complete flow synchronously (no queue).
     
     Runs all stages and returns all intermediate outputs.
     
@@ -351,7 +350,7 @@ async def get_test_config():
     return {
         "app_name": settings.app_name,
         "debug": settings.debug,
-        "anthropic_model": settings.anthropic_model,
+        "llama3_model": settings.llama3_model,
         "rate_limiting": settings.rate_limit_enabled,
         "canvas": {
             "width": settings.canvas_width,
@@ -359,8 +358,8 @@ async def get_test_config():
         },
         "available_components": settings.available_components,
         "queues": {
-            "requests": settings.rabbitmq_queue_ai_requests,
-            "responses": settings.rabbitmq_queue_ai_responses
+            "generation": settings.celery_queue_generation,
+            "default": settings.celery_queue_default
         }
     }
 
