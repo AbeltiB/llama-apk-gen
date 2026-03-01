@@ -8,7 +8,6 @@ from datetime import datetime, timezone, timedelta
 import asyncio
 
 from app.core.cache import cache_manager
-from app.core.messaging import queue_manager
 from app.utils.logging import get_logger, log_context
 
 router = APIRouter()
@@ -266,7 +265,7 @@ async def _get_queue_stats() -> Dict[str, Any]:
     """Get queue statistics"""
     
     try:
-        # These would come from RabbitMQ management API
+        # These can come from Celery events/Flower in production
         # For now, we'll use Redis counters
         
         return {

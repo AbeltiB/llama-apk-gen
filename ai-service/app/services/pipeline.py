@@ -133,14 +133,15 @@ class CacheCheckStage(PipelineStage):
                 extra={"task_id": request.task_id}
             )
 
-            logger.info("🚫 CACHE CHECK DISABLED - forcing cache miss for dev")
-            
-            context['cache_hit'] = False
-            #context['cached_result'] = cached_result.get('result', {})
-            context['cached_result'] = None
-            
-            #return {"cache_hit": True, "result": cached_result}
-            return {"cache_hit": False, "disabled": True}
+            if not settings.semantic_cache_enabled:
+                logger.info('pipeline.cache.disabled', extra={'task_id': request.task_id})
+                context['cache_hit'] = False
+                context['cached_result'] = None
+                return {'cache_hit': False, 'disabled': True}
+
+            context['cache_hit'] = True
+            context['cached_result'] = cached_result.get('result', {})
+            return {'cache_hit': True, 'result': cached_result}
         
         logger.info(
             "pipeline.cache.miss",
@@ -157,7 +158,6 @@ class IntentAnalysisStage(PipelineStage):
     
     def __init__(self):
         super().__init__("intent_analysis")
-        print(f"DEBUG: IntentAnalysisStage initialized")
     
     def _extract_confidence_values(self, confidence: Any) -> Dict[str, float]:
         """Extract confidence values from object or dict"""
@@ -171,8 +171,6 @@ class IntentAnalysisStage(PipelineStage):
     
     async def execute(self, request: AIRequest, context: Dict[str, Any]) -> Dict[str, Any]:
         """Analyze intent"""
-        print(f"DEBUG: IntentAnalysisStage.execute() called")
-
         # Skip if cache hit
         if context.get('cache_hit'):
             logger.info("pipeline.intent_analysis.skipped_cache_hit")

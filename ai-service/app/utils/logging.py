@@ -396,9 +396,9 @@ Examples:
 - cache.get.miss
 - queue.message.published
 - queue.message.consumed
-- claude.api.called
-- claude.api.succeeded
-- claude.api.rate_limited
+- llama3.api.called
+- llama3.api.succeeded
+- llama3.api.rate_limited
 
 Searchable queries:
 - All API events: event:api.*

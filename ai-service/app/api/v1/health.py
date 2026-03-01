@@ -1,5 +1,5 @@
 """
-Comprehensive health check system for AI service with LLAMA3, RabbitMQ, Redis, and PostgreSQL.
+Comprehensive health check system for AI service with LLAMA3, Celery/Redis, and PostgreSQL.
 """
 from fastapi import APIRouter, status, Response
 from pydantic import BaseModel
@@ -12,7 +12,7 @@ import os
 from app.config import settings
 from app.core.cache import cache_manager
 from app.core.database import db_manager
-from app.core.messaging import queue_manager
+from app.core.celery_app import celery_app
 from app.utils.logging import get_logger, log_context
 
 router = APIRouter()
@@ -175,32 +175,35 @@ async def check_redis() -> DependencyStatus:
         )
 
 
-async def check_rabbitmq() -> DependencyStatus:
-    """Check RabbitMQ connection"""
+async def check_messaging() -> DependencyStatus:
+    """Check Celery messaging health (Redis broker)."""
     start = time.time()
-    
+
     try:
-        if not queue_manager.is_connected:
+        inspect = celery_app.control.inspect(timeout=1.0)
+        ping_response = inspect.ping() or {}
+        response_time = (time.time() - start) * 1000
+
+        if ping_response:
             return DependencyStatus(
-                name="RabbitMQ",
-                status="unhealthy",
-                message="Not connected",
+                name="Celery Messaging",
+                status="healthy",
+                response_time_ms=response_time,
+                message="Celery workers reachable",
                 last_checked=datetime.now(timezone.utc).isoformat() + "Z"
             )
-        
-        response_time = (time.time() - start) * 1000
-        
+
         return DependencyStatus(
-            name="RabbitMQ",
-            status="healthy",
+            name="Celery Messaging",
+            status="degraded",
             response_time_ms=response_time,
-            message="Connected",
+            message="No active Celery worker responded to ping",
             last_checked=datetime.now(timezone.utc).isoformat() + "Z"
         )
-        
+
     except Exception as e:
         return DependencyStatus(
-            name="RabbitMQ",
+            name="Celery Messaging",
             status="unhealthy",
             message=str(e),
             last_checked=datetime.now(timezone.utc).isoformat() + "Z"
@@ -359,7 +362,7 @@ async def readiness_check(response: Response) -> ReadinessResponse:
     
     Checks:
     - Redis connected?
-    - RabbitMQ connected?
+    - Celery messaging healthy?
     - PostgreSQL connected?
     - LLAMA3 model available?
     
@@ -373,9 +376,9 @@ async def readiness_check(response: Response) -> ReadinessResponse:
         start_time = time.time()
         
         # Check all dependencies in parallel
-        redis_status, rabbitmq_status, db_status, llama_status = await asyncio.gather(
+        redis_status, messaging_status, db_status, llama_status = await asyncio.gather(
             check_redis(),
-            check_rabbitmq(),
+            check_messaging(),
             check_database(),
             check_llama3(),
             return_exceptions=True
@@ -390,11 +393,11 @@ async def readiness_check(response: Response) -> ReadinessResponse:
                 last_checked=datetime.now(timezone.utc).isoformat() + "Z"
             )
         
-        if isinstance(rabbitmq_status, Exception):
-            rabbitmq_status = DependencyStatus(
-                name="RabbitMQ",
+        if isinstance(messaging_status, Exception):
+            messaging_status = DependencyStatus(
+                name="Celery Messaging",
                 status="unhealthy",
-                message=str(rabbitmq_status),
+                message=str(messaging_status),
                 last_checked=datetime.now(timezone.utc).isoformat() + "Z"
             )
         
@@ -416,7 +419,7 @@ async def readiness_check(response: Response) -> ReadinessResponse:
         
         dependencies = {
             "redis": redis_status,
-            "rabbitmq": rabbitmq_status,
+            "messaging": messaging_status,
             "database": db_status,
             "llama3": llama_status
         }
@@ -522,9 +525,9 @@ async def full_health_check() -> FullHealthResponse:
         start_time = time.time()
         
         # Check all dependencies in parallel
-        redis_status, rabbitmq_status, db_status, llama_status, metrics = await asyncio.gather(
+        redis_status, messaging_status, db_status, llama_status, metrics = await asyncio.gather(
             check_redis(),
-            check_rabbitmq(),
+            check_messaging(),
             check_database(),
             check_llama3(),
             get_service_metrics(),
@@ -540,11 +543,11 @@ async def full_health_check() -> FullHealthResponse:
                 last_checked=datetime.now(timezone.utc).isoformat() + "Z"
             )
         
-        if isinstance(rabbitmq_status, Exception):
-            rabbitmq_status = DependencyStatus(
-                name="RabbitMQ",
+        if isinstance(messaging_status, Exception):
+            messaging_status = DependencyStatus(
+                name="Celery Messaging",
                 status="unhealthy",
-                message=str(rabbitmq_status),
+                message=str(messaging_status),
                 last_checked=datetime.now(timezone.utc).isoformat() + "Z"
             )
         
@@ -569,7 +572,7 @@ async def full_health_check() -> FullHealthResponse:
         
         dependencies = {
             "redis": redis_status,
-            "rabbitmq": rabbitmq_status,
+            "messaging": messaging_status,
             "database": db_status,
             "llama3": llama_status
         }

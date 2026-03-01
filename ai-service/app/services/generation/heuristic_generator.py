@@ -1,7 +1,7 @@
 """
 Enhanced Heuristic Architecture Generator
 
-Generates valid architectures deterministically when Claude API fails.
+Generates valid architectures deterministically when Llama3 generation fails.
 100% schema-compliant with proper validation support.
 """
 from typing import Dict, Any
