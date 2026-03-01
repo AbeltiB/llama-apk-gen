@@ -176,17 +176,15 @@ class ResultListResponse(BaseModel):
 
 @router.get(
     "/results/{task_id}",
-    # Temporarily remove response_model to bypass validation
-    # response_model=GenerationResult,
     tags=["Results"],
-    summary="Get complete generation result",
-    description="Retrieve the complete generation result including architecture, layouts, and Blockly blocks"
+    summary="Get converted generation result",
+    description="Retrieve the converted JSON result (default response for frontend consumers)"
 )
 async def get_result(task_id: str) -> Dict[str, Any]:
     """
     Get complete generation result by task ID.
     
-    TEMPORARY: Returns raw data without strict validation
+    Returns converted result data stored for frontend consumption.
     """
     
     with log_context(task_id=task_id, endpoint="/api/v1/results", method="GET"):
@@ -220,16 +218,6 @@ async def get_result(task_id: str) -> Dict[str, Any]:
                     "task_id": task_id,
                     "status": task_data.get("status"),
                     "created_at": task_data.get("created_at")
-                }
-            )
-            
-            # TEMPORARY: Return raw data for debugging
-            logger.debug(
-                "api.results.get.raw_data",
-                extra={
-                    "task_id": task_id,
-                    "raw_task_data": str(task_data)[:500],  # First 500 chars
-                    "raw_result": str(task_data.get("result", {}))[:500] if task_data.get("result") else "No result"
                 }
             )
             
@@ -271,7 +259,6 @@ async def get_result(task_id: str) -> Dict[str, Any]:
                     }
                 )
             
-            # TEMPORARY: Return raw result data without validation
             response = {
                 "task_id": task_id,
                 "status": current_status,
@@ -279,30 +266,20 @@ async def get_result(task_id: str) -> Dict[str, Any]:
                 "session_id": task_data.get("session_id", "unknown"),
                 "prompt": task_data.get("prompt", ""),
                 "created_at": task_data.get("created_at", ""),
-                "completed_at": task_data.get("updated_at"),
-                "raw_result": result_data,
+                "completed_at": task_data.get("updated_at") or task_data.get("completed_at"),
+                "result": result_data,
                 "metadata": result_data.get("metadata", {}),
                 "warnings": result_data.get("warnings", []),
                 "errors": result_data.get("errors", []),
-                "note": "TEMPORARY: Returning raw data without validation"
+                "format": "converted"
             }
             
-            # Try to parse layout data manually for debugging
-            if "layout" in result_data:
-                layout_data = result_data["layout"]
-                response["layout_debug"] = {
-                    "type": type(layout_data).__name__,
-                    "keys": list(layout_data.keys()) if isinstance(layout_data, dict) else "Not a dict",
-                    "sample_component": layout_data.get("components", [{}])[0] if isinstance(layout_data, dict) and "components" in layout_data else "No components"
-                }
-            
             logger.info(
-                "api.results.get.success_raw",
+                "api.results.get.success",
                 extra={
                     "task_id": task_id,
                     "status": current_status,
-                    "has_layout": "layout" in result_data,
-                    "layout_type": type(result_data.get("layout")).__name__ if result_data.get("layout") else None
+                    "has_result": bool(result_data)
                 }
             )
             
@@ -328,6 +305,40 @@ async def get_result(task_id: str) -> Dict[str, Any]:
                 "raw_task_data_available": bool(task_data),
                 "raw_result_available": bool(task_data.get("result")) if task_data else False
             }
+
+
+@router.get(
+    "/results/{task_id}/raw",
+    tags=["Results"],
+    summary="Get raw system output",
+    description="Retrieve pipeline output before conversion (for debugging and audits)"
+)
+async def get_raw_result(task_id: str) -> Dict[str, Any]:
+    """Get raw (pre-conversion) output for a completed task."""
+
+    with log_context(task_id=task_id, endpoint="/api/v1/results/raw", method="GET"):
+        task_key = f"task:{task_id}"
+        task_data = await cache_manager.get(task_key)
+
+        if not task_data:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "result_not_found",
+                    "message": f"No result found for task ID: {task_id}",
+                    "task_id": task_id
+                }
+            )
+
+        return {
+            "task_id": task_id,
+            "status": task_data.get("status", "pending"),
+            "prompt": task_data.get("prompt", ""),
+            "created_at": task_data.get("created_at", ""),
+            "completed_at": task_data.get("updated_at") or task_data.get("completed_at"),
+            "result": task_data.get("raw_result", task_data.get("result", {})),
+            "format": "raw"
+        }
 
 @router.get(
     "/results",
@@ -405,7 +416,7 @@ async def list_results(
                         prompt=task_data.get("prompt", "")[:100],  # Truncate
                         status=ResultStatus(task_data.get("status", "pending")),
                         created_at=task_data.get("created_at", ""),
-                        completed_at=task_data.get("updated_at"),
+                        completed_at=task_data.get("updated_at") or task_data.get("completed_at"),
                         app_type=app_type
                     ))
                     

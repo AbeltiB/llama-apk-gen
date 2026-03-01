@@ -237,7 +237,7 @@ class LayoutValidator:
     ) -> None:
         """Validate touch target sizes meet minimum requirements"""
         
-        interactive_types = {'Button', 'Switch', 'Checkbox'}
+        interactive_types = set(get_interactive_components())
         
         for component in layout.components:
             if component.component_type not in interactive_types:

@@ -10,6 +10,7 @@ from datetime import datetime
 from app.config import settings
 from app.models.schemas.architecture import ArchitectureDesign, ScreenDefinition
 from app.utils.logging import get_logger, log_context
+from app.models.schemas.component_catalog import is_input_component, has_component_event
 
 logger = get_logger(__name__)
 
@@ -258,8 +259,8 @@ class ArchitectureValidator:
             ))
         
         # Check for common UI patterns
-        has_input = any(c in all_components for c in ['InputText', 'TextArea'])
-        has_button = 'Button' in all_components
+        has_input = any(is_input_component(c) for c in all_components)
+        has_button = any(has_component_event(c, 'onPress') for c in all_components)
         
         if has_input and not has_button:
             self.warnings.append(ValidationWarning(
@@ -382,7 +383,7 @@ class ArchitectureValidator:
         
         # Check for input validation
         has_inputs = any(
-            any(c in screen.components for c in ['InputText', 'TextArea'])
+            any(is_input_component(c) for c in screen.components)
             for screen in architecture.screens
         )
         

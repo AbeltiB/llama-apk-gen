@@ -15,6 +15,7 @@ from app.models.schemas import (
     DataFlowDiagram
 )
 from app.utils.logging import get_logger
+from app.models.schemas.component_catalog import get_template_components
 
 logger = get_logger(__name__)
 
@@ -142,7 +143,7 @@ class HeuristicArchitectureGenerator:
                     id="main_screen",
                     name="Counter",
                     purpose="Display counter value and control buttons",
-                    components=["Text", "Button", "Button"],
+                    components=get_template_components("counter"),
                     navigation=[]
                 )
             ],
@@ -175,7 +176,7 @@ class HeuristicArchitectureGenerator:
                     id="todo_screen",
                     name="Todo List",
                     purpose="Manage todo items with add, complete, and delete",
-                    components=["InputText", "Button", "Text", "Checkbox", "Button"],
+                    components=get_template_components("todo"),
                     navigation=[]
                 )
             ],
@@ -214,7 +215,7 @@ class HeuristicArchitectureGenerator:
                     id="calc_screen",
                     name="Calculator",
                     purpose="Perform basic arithmetic operations",
-                    components=["Text", "Button"],
+                    components=get_template_components("calculator"),
                     navigation=[]
                 )
             ],
@@ -259,7 +260,7 @@ class HeuristicArchitectureGenerator:
                     id="timer_screen",
                     name="Timer",
                     purpose="Timer with start, stop, and reset controls",
-                    components=["Text", "Button", "Button", "Button"],
+                    components=get_template_components("timer"),
                     navigation=[]
                 )
             ],
@@ -298,14 +299,14 @@ class HeuristicArchitectureGenerator:
                     id="notes_list",
                     name="Notes List",
                     purpose="Display list of notes",
-                    components=["Button", "Text"],
+                    components=get_template_components("quiz"),
                     navigation=["note_detail"]
                 ),
                 ScreenDefinition(
                     id="note_detail",
                     name="Note Detail",
                     purpose="View and edit note content",
-                    components=["TextArea", "Button"],
+                    components=get_template_components("notes"),
                     navigation=[]
                 )
             ],
@@ -346,7 +347,7 @@ class HeuristicArchitectureGenerator:
                     id="weather_screen",
                     name="Weather",
                     purpose="Display current weather information",
-                    components=["Text", "InputText", "Button"],
+                    components=get_template_components("search"),
                     navigation=[]
                 )
             ],
@@ -385,14 +386,14 @@ class HeuristicArchitectureGenerator:
                     id="contacts_list",
                     name="Contacts",
                     purpose="Display list of contacts",
-                    components=["Text", "Button"],
+                    components=get_template_components("calculator"),
                     navigation=["contact_detail"]
                 ),
                 ScreenDefinition(
                     id="contact_detail",
                     name="Contact Detail",
                     purpose="View and edit contact information",
-                    components=["InputText", "InputText", "InputText", "Button"],
+                    components=get_template_components("form"),
                     navigation=[]
                 )
             ],
@@ -433,7 +434,7 @@ class HeuristicArchitectureGenerator:
                     id="main_screen",
                     name="Main Screen",
                     purpose=f"Main screen for: {prompt[:100]}",
-                    components=["Text", "Button"],
+                    components=get_template_components("calculator"),
                     navigation=[]
                 )
             ],

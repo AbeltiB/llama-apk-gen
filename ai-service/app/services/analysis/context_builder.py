@@ -6,6 +6,7 @@ from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
 from app.services.analysis.intent_schemas import IntentAnalysisResult
+from app.models.schemas.component_catalog import get_template_components
 
 
 class ContextRelevanceScore:
@@ -469,7 +470,7 @@ if __name__ == "__main__":
             complexity=ComplexityLevel.SIMPLE,
             confidence=ConfidenceBreakdown(),
             extracted_entities=ExtractedEntities(
-                components=["Button", "Text"],
+                components=get_template_components("quiz"),
                 features=["counter"]
             ),
             action_recommendation=ActionRecommendation.PROCEED,
