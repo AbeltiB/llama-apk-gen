@@ -42,7 +42,7 @@ class ProductionIntentAnalyzer:
     def __init__(self, config: Dict[str, Any]):
         """Initialize analyzer"""
         # Llama3 configuration
-        self.api_url = config.get('llama3_api_url', '')
+        self.api_url = config.get('llama3_api_url', 'https://fastchat.ideeza.com/v1/chat/completions')
         self.api_key = config.get('llama3_api_key', '')
         self.model = config.get('llama3_model', 'llama-3-70b-instruct')
         self.timeout = config.get('timeout', 60.0)

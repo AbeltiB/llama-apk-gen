@@ -492,16 +492,39 @@ class LayoutGenerator:
                     max_tokens=4096
                 )
 
+                dump_path = None
                 if getattr(settings, "LAYOUT_LLM_DEBUG", False):
-                    dump_path = self._dump_raw_llm_response(
-                        screen_id=screen.id,
-                        screen_name=screen.name,
-                        attempt=attempt,
-                        provider=response.provider.value,
-                        content=response.content
-                    )
-                else:
-                    dump_path = None
+                    if hasattr(self, '_dump_raw_llm_response') and callable(getattr(self, '_dump_raw_llm_response')):
+                        try:
+                            debug_dir = getattr(settings, 'LAYOUT_LLM_DEBUG_DIR', './debug/layout_dumps')
+                            if debug_dir:
+                                dump_path = self._dump_raw_llm_response(
+                                    screen_id=screen.id,
+                                    screen_name=screen.name,
+                                    attempt=attempt,
+                                    provider=response.provider.value,
+                                    content=response.content
+                                )
+                            else:
+                                logger.warning(
+                                    "⚠️ layout.llm.debug_dir_not_set",
+                                    extra={"note": "LAYOUT_LLM_DEBUG_DIR not configured"}
+                                )
+                        except Exception as dump_error:
+                            logger.warning(
+                                "⚠️ layout.llm.dump_failed",
+                                extra={
+                                "error": str(dump_error),
+                                "error_type": type(dump_error).__name__
+                                }
+                            )
+                            dump_path = None
+                    
+                    else:
+                        logger.warning(
+                            "⚠️ layout.llm.dump_method_missing",
+                            extra={"note": "_dump_raw_llm_response not available on this instance"}
+                        )
                     
                 api_duration = int((asyncio.get_event_loop().time() - start_time) * 1000)
                 
@@ -1249,30 +1272,84 @@ def _dump_raw_llm_response(
     """
     Dump raw LLM response to disk for debugging.
     Returns the file path.
+    
+    ✅ Enhanced with safety checks and directory creation
     """
     import os
-
-    os.makedirs(settings.LAYOUT_LLM_DEBUG_DIR, exist_ok=True)
-
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    filename = f"layout_{screen_id}_attempt{attempt}_{timestamp}.json.txt"
-    path = os.path.join(settings.LAYOUT_LLM_DEBUG_DIR, filename)
-
-    with open(path, "w", encoding="utf-8") as f:
-        f.write(content)
-
-    logger.warning(
-        "🧪 layout.llm.raw_dumped",
-        extra={
-            "screen_id": screen_id,
-            "screen_name": screen_name,
-            "attempt": attempt,
-            "provider": provider,
-            "path": path
-        }
-    )
-
-    return path
-
+    from pathlib import Path
+    
+    try:
+        # ✅ Safety Check 1: Get debug directory with fallback
+        debug_dir = getattr(settings, 'LAYOUT_LLM_DEBUG_DIR', './debug/layout_dumps')
+        
+        # ✅ Safety Check 2: Ensure directory exists (create if not)
+        debug_path = Path(debug_dir)
+        debug_path.mkdir(parents=True, exist_ok=True)
+        
+        # ✅ Safety Check 3: Verify directory is writable
+        if not os.access(debug_dir, os.W_OK):
+            logger.warning(
+                "⚠️ layout.llm.debug_dir_not_writable",
+                extra={"path": debug_dir}
+            )
+            # Fallback to temp directory
+            import tempfile
+            debug_dir = tempfile.gettempdir()
+            debug_path = Path(debug_dir)
+            debug_path.mkdir(parents=True, exist_ok=True)
+        
+        # ✅ Safety Check 4: Generate safe filename
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        # Sanitize screen_id and screen_name for filename
+        safe_screen_id = "".join(c for c in screen_id if c.isalnum() or c in '-_')
+        safe_screen_name = "".join(c for c in screen_name if c.isalnum() or c in '-_')[:50]
+        filename = f"layout_{safe_screen_id}_{safe_screen_name}_attempt{attempt}_{timestamp}.json.txt"
+        path = os.path.join(debug_dir, filename)
+        
+        # ✅ Safety Check 5: Write file with error handling
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(content)
+        
+        # ✅ Safety Check 6: Verify file was created
+        if os.path.exists(path):
+            file_size = os.path.getsize(path)
+            logger.warning(
+                "🧪 layout.llm.raw_dumped",
+                extra={
+                    "screen_id": screen_id,
+                    "screen_name": screen_name,
+                    "attempt": attempt,
+                    "provider": provider,
+                    "path": path,
+                    "file_size_bytes": file_size
+                }
+            )
+            return path
+        else:
+            logger.error(
+                "❌ layout.llm.dump_failed",
+                extra={"reason": "File not created", "path": path}
+            )
+            return None
+            
+    except PermissionError as e:
+        logger.error(
+            "❌ layout.llm.permission_error",
+            extra={"error": str(e), "path": debug_dir}
+        )
+        return None
+    except OSError as e:
+        logger.error(
+            "❌ layout.llm.os_error",
+            extra={"error": str(e), "error_type": type(e).__name__}
+        )
+        return None
+    except Exception as e:
+        logger.error(
+            "❌ layout.llm.dump_unexpected_error",
+            extra={"error": str(e), "error_type": type(e).__name__}
+        )
+        return None
+        
 # Global layout generator instance
 layout_generator = LayoutGenerator()

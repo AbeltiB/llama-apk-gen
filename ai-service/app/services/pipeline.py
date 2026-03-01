@@ -14,6 +14,7 @@ AI Pipeline - Llama3 Version
 
 All generation uses Llama3 as primary provider with heuristic fallback.
 """
+from sys import exc_info
 import app.api.v1.results
 import time
 from typing import Dict, Any, Optional, List, Tuple
@@ -35,6 +36,9 @@ from app.services.generation.architecture_generator import architecture_generato
 from app.services.generation.layout_generator import layout_generator
 from app.services.generation.blockly_generator import blockly_generator
 from app.services.generation.cache_manager import semantic_cache
+
+#Import output JSON formatter
+from app.utils.output_JSON_formatter import format_pipeline_output, validate_output_schema
 
 logger = get_logger(__name__)
 
@@ -797,12 +801,34 @@ class Pipeline:
                         'success': len(context['errors']) == 0
                     }
                 }
+
+                try:
+                    formatted_result = format_pipeline_output(result)
+
+                    is_valid, validation_errors = validate_output_schema(formatted_result)
+                    if not is_valid:
+                        logger.warning(
+                            "Pipeline.output.validation_warnings",
+                            extra={"error": validation_errors}
+                        )
+
+                    result_to_send = formatted_result
+
+                except Exception as format_error:
+                    logger.error(
+                        "Pipeline.output_formatting.failed",
+                        extra={"errors": str(format_error)},
+                        exc_info=format_error
+                    )
+
+                    #as a fall back let us send the original if formatting somewhat failed
+                    result_to_send = result
                 
                 # Send completion
                 await self.send_complete(
                     task_id=request.task_id,
                     socket_id=request.socket_id,
-                    result=result
+                    result=result_to_send
                 )
                 
                 logger.info(

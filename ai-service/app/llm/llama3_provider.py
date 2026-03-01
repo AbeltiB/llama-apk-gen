@@ -20,7 +20,7 @@ class Llama3Provider(BaseLLMProvider):
         super().__init__(config)
         self.provider_name = LLMProvider.LLAMA3
 
-        self.api_url = config.get("llama3_api_url", "https://fastchat.ideeza.com/v1")
+        self.api_url = config.get("llama3_api_url", "https://fastchat.ideeza.com/v1/chat/completions")
         self.model = config.get("llama3_model", "llama-3")
         self.api_key = config.get("llama3_api_key")
 

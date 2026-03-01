@@ -7,7 +7,7 @@ from pydantic import BaseModel, Field
 
 class NavigationStructure(BaseModel):
     """App navigation configuration"""
-    type: Literal["stack", "tab", "drawer"] = "stack"
+    type: Literal["stack", "tab", "drawer", "none"] = "stack"
     routes: List[Dict[str, str]] = Field(default_factory=list)
 
 

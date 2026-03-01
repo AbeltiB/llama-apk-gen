@@ -71,7 +71,7 @@ class Settings(BaseSettings):
     llm_default_max_tokens: int = 4096
 
     LAYOUT_LLM_DEBUG: bool = True
-    LAYOUT_LLM_DEBUG_DIR: str = "debug/llm_layout_dumps"
+    LAYOUT_LLM_DEBUG_DIR: str = "./debug/llm_layout_dumps"
 
 
     # -------------------------
