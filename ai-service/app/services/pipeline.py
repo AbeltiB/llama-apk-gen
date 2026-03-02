@@ -40,8 +40,7 @@ from app.services.generation.blockly_generator import blockly_generator
 from app.services.generation.cache_manager import semantic_cache
 
 #Import output JSON formatter
-from app.utils.output_JSON_formatter import format_pipeline_output, validate_output_schema
-
+from app.utils.output_JSON_formatter import format_pipeline_output, validate_output
 logger = get_logger(__name__)
 
 
@@ -836,7 +835,7 @@ class Pipeline:
                 try:
                     formatted_result = format_pipeline_output(result)
 
-                    is_valid, validation_errors = validate_output_schema(formatted_result)
+                    is_valid, validation_errors = validate_output(formatted_result)
                     if not is_valid:
                         logger.warning(
                             "Pipeline.output.validation_warnings",

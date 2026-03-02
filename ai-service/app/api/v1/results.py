@@ -5,13 +5,17 @@ REST API endpoints for retrieving generation results.
 Provides complete, consumable responses for frontend systems.
 """
 from fastapi import APIRouter, HTTPException, status, Query
+from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 from enum import Enum
+import json
+
 
 from app.core.cache import cache_manager
 from app.utils.logging import get_logger, log_context
+from app.utils.output_JSON_formatter import get_export_ready_json
 
 router = APIRouter()
 logger = get_logger(__name__)
@@ -173,6 +177,103 @@ class ResultListResponse(BaseModel):
 # ============================================================================
 # ENDPOINTS
 # ============================================================================
+
+# ============================================================================
+# NEW ENDPOINT: Export-ready JSON (clean ideeza-project.json)
+# ============================================================================
+
+@router.get(
+    "/results/{task_id}/export",
+    tags=["Results"],
+    summary="Get export‑ready JSON (ideeza‑project.json)",
+    description=(
+        "Retrieve a clean JSON that exactly matches the ideeza‑project.json schema. "
+        "All required fields are guaranteed to exist with sensible defaults. "
+        "Use ?download=true to trigger a file download."
+    )
+)
+async def export_result(
+    task_id: str,
+    download: bool = Query(False, description="Download as file (Content-Disposition attachment)")
+) -> Response:
+    """
+    Return the export‑ready JSON for a completed generation task.
+    
+    The response is the pure ideeza‑project.json structure – no extra wrapper fields.
+    If `download` is true, a `Content-Disposition: attachment` header is set.
+    """
+    with log_context(task_id=task_id, endpoint="/api/v1/results/export", method="GET"):
+        logger.info(
+            "api.results.export.requested",
+            extra={"task_id": task_id, "download": download}
+        )
+
+        task_key = f"task:{task_id}"
+        task_data = await cache_manager.get(task_key)
+
+        if not task_data:
+            logger.warning("api.results.export.not_found", extra={"task_id": task_id})
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail={
+                    "error": "result_not_found",
+                    "message": f"No result found for task ID: {task_id}"
+                }
+            )
+
+        current_status = task_data.get("status", "pending")
+        if current_status != "completed":
+            logger.info(
+                "api.results.export.not_ready",
+                extra={"task_id": task_id, "status": current_status}
+            )
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail={
+                    "error": "result_not_ready",
+                    "message": f"Task is {current_status}, cannot export",
+                    "status": current_status
+                }
+            )
+
+        # The `result` field should already be the output of format_pipeline_output
+        converted = task_data.get("result", {})
+        if not converted:
+            logger.error("api.results.export.missing_result", extra={"task_id": task_id})
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "result_incomplete",
+                    "message": "Task marked completed but result data is missing"
+                }
+            )
+
+        # Generate the export‑ready JSON (guarantees all fields)
+        try:
+            export_json = get_export_ready_json(converted)
+        except Exception as e:
+            logger.exception("api.results.export.failed", extra={"task_id": task_id, "error": str(e)})
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail={
+                    "error": "export_failed",
+                    "message": f"Failed to generate export‑ready JSON: {str(e)}"
+                }
+            )
+
+        # If download requested, return as an attachment
+        if download:
+            json_bytes = json.dumps(export_json, indent=2).encode("utf-8")
+            return Response(
+                content=json_bytes,
+                media_type="application/json",
+                headers={
+                    "Content-Disposition": f"attachment; filename=ideeza-project-{task_id}.json"
+                }
+            )
+
+        # Otherwise return plain JSON
+        return JSONResponse(content=export_json)
 
 @router.get(
     "/results/{task_id}",

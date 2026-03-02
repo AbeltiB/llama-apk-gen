@@ -1,775 +1,984 @@
 """
-Output JSON Formatter - Transforms pipeline output to ideeza-project schema
+output_JSON_formatter.py
+Transforms AI pipeline output to the exact ideeza-project schema required by System FE.
 
-This module converts the AI pipeline's internal representation to the target
-JSON structure expected by the ideeza project system.
+Supports two input shapes:
+  Path A – "structured":  input has result.componentManager.components  (LLM success)
+  Path B – "raw":         input has raw_result.layout / raw_result.architecture  (heuristic fallback)
 
-Target Structure:
-{
-  "importManager": {...},
-  "stateManager": {...},
-  "functionManager": {...},
-  "componentManager": {...},
-  "uiManager": {...},
-  "blocklyManager": {...},
-  "code": "..."
-}
+Output schema (top-level keys, matching ideeza-project.json exactly):
+  importManager, stateManager, functionManager, componentManager,
+  uiManager, code, blocklyManager, blocklyByScreen   ← blocklyByScreen at ROOT, NOT inside blocklyManager
 """
+
 import json
 import re
-from typing import Dict, Any, List, Optional
-from datetime import datetime, timezone
-from app.utils.logging import get_logger
-from app.models.schemas.component_catalog import (
-    get_component_imports,
-    get_output_component_type,
-)
+import sys
+import logging
+from typing import Any, Dict, List, Optional, Tuple
 
-logger = get_logger(__name__)
+logger = logging.getLogger(__name__)
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Constants
+# ──────────────────────────────────────────────────────────────────────────────
+
+COMPONENT_TYPE_MAP: Dict[str, str] = {
+    "Button": "Button",
+    "Text": "Text_Content",
+    "TextView": "Text_Content",
+    "Text_Content": "Text_Content",
+    "Switch": "Switch",
+    "List": "List",
+    "ListView": "List",
+    "Input": "Input",
+    "TextInput": "Input",
+    "TextField": "Input",
+}
+
+COMPONENT_IMPORTS: Dict[str, List[Dict[str, str]]] = {
+    "Button": [{"name": "Button", "source": "tamagui"}],
+    "Text_Content": [
+        {"name": "Text", "source": "tamagui"},
+        {"name": "XStack", "source": "tamagui"},
+    ],
+    "Switch": [
+        {"name": "Switch", "source": "tamagui"},
+        {"name": "Label", "source": "tamagui"},
+        {"name": "XStack", "source": "tamagui"},
+    ],
+    "List": [{"name": "ScrollView", "source": "react-native"}],
+    "Input": [{"name": "Input", "source": "tamagui"}],
+}
+
+UI_SHORTCUTS: List[Dict] = [
+    {"key": "Delete"},
+    {"key": "Backspace"},
+    {"key": "z", "ctrlKey": True},
+    {"key": "y", "ctrlKey": True},
+    {"key": "["},
+    {"key": "]"},
+    {"key": "ArrowLeft", "shiftKey": True, "altKey": True},
+    {"key": "ArrowRight", "shiftKey": True, "altKey": True},
+    {"key": "r", "shiftKey": True, "altKey": True},
+]
+
+EMPTY_IMPORT_MANAGER: Dict[str, Any] = {"globalImports": [], "componentImports": {}}
+EMPTY_FUNCTION_MANAGER: Dict[str, Any] = {"functions": {}}
+EMPTY_XML = '<xml xmlns="https://developers.google.com/blockly/xml"></xml>'
+
+REQUIRED_TOP_LEVEL_KEYS = frozenset({
+    "importManager", "stateManager", "functionManager",
+    "componentManager", "uiManager", "code", "blocklyManager", "blocklyByScreen",
+})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Small helpers
+# ──────────────────────────────────────────────────────────────────────────────
 
 def _sanitize_id(value: str) -> str:
-    if not value:
-        return "id"
-    cleaned = re.sub(r'[^a-zA-Z0-9_]', '_', str(value))
-    cleaned = re.sub(r'_+', '_', cleaned).strip('_')
+    cleaned = re.sub(r"[^a-zA-Z0-9_]", "_", str(value or "id"))
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
     return cleaned or "id"
 
-# Component mapping and imports are sourced from the central component catalog.
 
-# Default style tokens for ideeza theme
-STYLE_TOKENS = {
-    "primary": "$primary",
-    "secondary": "$secondary",
-    "background": "$background",
-    "backgroundStrong": "$backgroundStrong",
-    "color": "$color",
-    "thin": "$thin",
-    "normal": "$normal",
-    "thick": "$thick",
-    "hairline": "$hairline",
-    "0": "$0",
-    "4": "$4",
-    "2": "$2",
-}
+def _ideeza_type(raw_type: str) -> str:
+    return COMPONENT_TYPE_MAP.get(raw_type, "Text_Content")
 
 
-def format_pipeline_output(raw_result: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Transform pipeline output to ideeza-project JSON structure.
-    
-    Args:
-        raw_result: The pipeline's output containing architecture, layout, blockly, metadata
-        
-    Returns:
-        Dict matching the ideeza-project schema
-    """
-    try:
-        logger.info("output_formatter.starting", extra={"raw_result_keys": list(raw_result.keys())})
-        
-        # Extract main sections
-        architecture = raw_result.get('architecture', {})
-        layouts = raw_result.get('layout', {})
-        blockly = raw_result.get('blockly', {})
-        metadata = raw_result.get('metadata', {})
-        
-        # Build each manager section
-        import_manager = _build_import_manager(architecture, layouts)
-        state_manager = _build_state_manager(architecture, layouts)
-        function_manager = _build_function_manager(blockly)
-        component_manager = _build_component_manager(architecture, layouts)
-        ui_manager = _build_ui_manager(architecture, layouts)
-        blockly_manager = _build_blockly_manager(blockly, layouts)
-        code = _generate_react_code(architecture, layouts, blockly, function_manager)
-        
-        # Assemble final output
-        formatted = {
-            "importManager": import_manager,
-            "stateManager": state_manager,
-            "functionManager": function_manager,
-            "componentManager": component_manager,
-            "uiManager": ui_manager,
-            "blocklyManager": blockly_manager,
-            "code": code,
-            "metadata": metadata,
-        }
-        
-        logger.info("output_formatter.completed", extra={"components_count": len(component_manager.get('components', {}))})
-        return formatted
-        
-    except Exception as e:
-        logger.error("output_formatter.failed", extra={"error": str(e)}, exc_info=e)
-        # Return minimal valid structure on error
-        return _create_fallback_output(str(e))
+def _reverse_ideeza_type(t: str) -> str:
+    return {"Text_Content": "Text", "Button": "Button", "Switch": "Switch",
+            "List": "ListView", "Input": "TextInput"}.get(t, t)
 
 
-def _build_import_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any]:
-    """Build importManager section"""
-    global_imports = [
-        {"name": "React", "source": "react", "named": False},
-        {"name": "useState", "source": "react", "named": True},
-        {"name": "useEffect", "source": "react", "named": True},
-        {"name": "useCallback", "source": "react", "named": True},
-        {"name": "useRef", "source": "react", "named": True},
-        {"name": "SafeAreaView", "source": "react-native-safe-area-context", "named": True},
-        {"name": "ScrollView", "source": "react-native", "named": True},
-        {"name": "View", "source": "react-native", "named": True},
-    ]
-    
-    component_imports = {}
-    
-    # Collect imports from components
-    for screen_id, layout in layouts.items():
-        components = layout.get('components', [])
-        for comp in components:
-            comp_type = comp.get('component_type', 'Text')
-            ideeza_type = get_output_component_type(comp_type)
-            imports = get_component_imports(comp_type)
-            if imports:
-                component_imports[ideeza_type] = imports
-    
-    return {
-        "globalImports": global_imports,
-        "componentImports": component_imports
-    }
+def _get_imports(ideeza_type: str) -> List[Dict[str, str]]:
+    return COMPONENT_IMPORTS.get(ideeza_type, COMPONENT_IMPORTS["Text_Content"])
 
 
-def _build_state_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any]:
-    """Build stateManager.appState section"""
-    app_state = {}
-    
-    for screen_id, layout in layouts.items():
-        components = layout.get('components', [])
-        for comp in components:
-            comp_id = comp.get('component_id', f"comp_{len(app_state)}")
-            comp_type = comp.get('component_type', 'Text')
-            properties = comp.get('properties', {})
-            
-            # Extract style properties
-            style_prop = properties.get('style', {})
-            style_value = style_prop.get('value', {}) if isinstance(style_prop, dict) else {}
-            
-            # Build component state entry
-            state_entry = {
-                "text": _extract_prop_value(properties.get('value')),
-                "color": _extract_prop_value(properties.get('color', '$color')),
-                "style": {
-                    "top": style_value.get('top', 0),
-                    "left": style_value.get('left', 0),
-                    "width": style_value.get('width', 280),
-                    "height": style_value.get('height', 44)
-                }
-            }
-            
-            # Add component-specific properties
-            if comp_type == 'Button':
-                state_entry.update({
-                    "size": _extract_prop_value(properties.get('size', '$4')),
-                    "variant": _extract_prop_value(properties.get('variant', 'solid')),
-                    "borderColor": _extract_prop_value(properties.get('borderColor', '$primary')),
-                    "borderWidth": _extract_prop_value(properties.get('borderWidth', '$thin')),
-                    "borderRadius": _extract_prop_value(properties.get('borderRadius', '$4')),
-                    "backgroundColor": _extract_prop_value(properties.get('backgroundColor', '$primary'))
-                })
-            elif comp_type == 'Switch':
-                state_entry.update({
-                    "size": _extract_prop_value(properties.get('size', '$2')),
-                    "label": _extract_prop_value(properties.get('label', 'Switch')),
-                    "value": _extract_prop_value(properties.get('checked', False)),
-                    "thumbColor": _extract_prop_value(properties.get('thumbColor', '$secondary')),
-                    "checkedColor": _extract_prop_value(properties.get('checkedColor', '$primary')),
-                    "defaultChecked": _extract_prop_value(properties.get('defaultChecked', False)),
-                    "backgroundColor": _extract_prop_value(properties.get('backgroundColor', '$backgroundStrong'))
-                })
-            elif comp_type == 'Text':
-                state_entry.update({
-                    "fontSize": _extract_prop_value(properties.get('fontSize', '$4')),
-                    "backgroundColor": _extract_prop_value(properties.get('backgroundColor', 'transparent'))
-                })
-            
-            state_key = f"{_sanitize_id(screen_id)}_{_sanitize_id(comp_id)}"
-            app_state[state_key] = state_entry
-    
-    return {"appState": app_state}
-
-
-def _get_blockly_blocks(blockly: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """Read Blockly blocks from supported payload shapes."""
-    if not isinstance(blockly, dict):
-        return []
-
-    workspace_blocks = blockly.get('workspace', {}).get('blocks', [])
-    if isinstance(workspace_blocks, list) and workspace_blocks:
-        return workspace_blocks
-
-    nested_blocks = blockly.get('blocks', {}).get('blocks', [])
-    if isinstance(nested_blocks, list):
-        return nested_blocks
-
-    return []
-
-
-
-def _default_function_body(comp_id: str, event_name: str) -> str:
-    """Generate a non-empty default body for event functions."""
-    event = (event_name or '').strip()
-    component = (comp_id or 'component').strip() or 'component'
-
-    if event == 'onPress':
-        return f"sendWebSocketText('{component.lower()}');"
-    if event == 'onCheckedChange':
-        return f"updateAppState('{component}.checked', isChecked);"
-    return f"// TODO: handle {component}.{event}"
-
-
-
-def _build_function_manager(blockly: Dict) -> Dict[str, Any]:
-    """Build functionManager section from Blockly blocks"""
-    functions = {}
-
-    blocks = _get_blockly_blocks(blockly)
-    for block in blocks:
-        block_type = block.get('type')
-        comp_id = block.get('component') or block.get('fields', {}).get('COMPONENT', '')
-        event_name = block.get('event') or block.get('fields', {}).get('EVENT', '')
-
-        if block_type not in {'event', 'component_event'} or not event_name:
-            continue
-
-        func_name = f"{comp_id}{event_name}"
-        functions[func_name] = {
-            "name": func_name,
-            "parameters": [],
-            "returnType": "void",
-            "body": _default_function_body(comp_id, event_name),
-            "triggers": [{
-                "component": comp_id,
-                "event": event_name
-            }]
-        }
-
-    return {"functions": functions}
-
-
-def _build_component_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any]:
-    """Build componentManager section"""
-    components = {}
-    roots = []
-    
-    for screen_id, layout in layouts.items():
-        layout_components = layout.get('components', [])
-        for comp in layout_components:
-            comp_id = comp.get('component_id')
-            if not comp_id:
-                continue
-                
-            comp_type = comp.get('component_type', 'Text')
-            ideeza_type = get_output_component_type(comp_type)
-            properties = comp.get('properties', {})
-            
-            # Build props with typed values
-            props = {}
-            for key, prop_value in properties.items():
-                if isinstance(prop_value, dict) and 'value' in prop_value:
-                    props[key] = {
-                        "type": "literal",
-                        "value": prop_value['value']
-                    }
-                else:
-                    props[key] = {
-                        "type": "literal",
-                        "value": prop_value
-                    }
-            
-            # Build component entry
-            component_entry = {
-                "id": comp_id,
-                "name": comp_id,
-                "type": ideeza_type,
-                "props": props,
-                "events": {},  # Populated from blockly
-                "children": [],
-                "parentId": "root",
-                "screenId": screen_id,
-                "condition": "",
-                "requiredImports": get_component_imports(comp_type)
-            }
-            
-            components[comp_id] = component_entry
-            roots.append(comp_id)
-    
-    return {
-        "components": components,
-        "roots": roots,
-        "stateManager": _build_state_manager(architecture, layouts),
-        "importManager": _build_import_manager(architecture, layouts),
-        "functionManager": _build_function_manager({})
-    }
-
-
-def _build_ui_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any]:
-    """Build uiManager section"""
-    screens = []
-    
-    # Extract screens from architecture
-    if isinstance(architecture, dict):
-        arch_screens = architecture.get('screens', [])
-        for screen in arch_screens:
-            screens.append({
-                "id": screen.get('id', 'screen-1'),
-                "name": screen.get('name', 'Home Page')
-            })
-    
-    # Default shortcuts matching ideeza schema
-    shortcuts = [
-        {"key": "Delete"},
-        {"key": "Backspace"},
-        {"key": "z", "ctrlKey": True},
-        {"key": "y", "ctrlKey": True},
-        {"key": "["},
-        {"key": "]"},
-        {"key": "ArrowLeft", "shiftKey": True, "altKey": True},
-        {"key": "ArrowRight", "shiftKey": True, "altKey": True},
-        {"key": "r", "shiftKey": True, "altKey": True}
-    ]
-    
-    # Build components list for uiManager (flat list of all components)
-    ui_components = []
-    for screen_id, layout in layouts.items():
-        for comp in layout.get('components', []):
-            comp_id = comp.get('component_id')
-            if comp_id:
-                comp_type = comp.get('component_type', 'Text')
-                ideeza_type = get_output_component_type(comp_type)
-                properties = comp.get('properties', {})
-                
-                # Build props
-                props = {}
-                for key, prop_value in properties.items():
-                    if isinstance(prop_value, dict) and 'value' in prop_value:
-                        props[key] = {"type": "literal", "value": prop_value['value']}
-                    else:
-                        props[key] = {"type": "literal", "value": prop_value}
-                
-                ui_components.append({
-                    "id": comp_id,
-                    "name": comp_id,
-                    "type": ideeza_type,
-                    "props": props,
-                    "events": {},
-                    "children": [],
-                    "parentId": "root",
-                    "screenId": screen_id,
-                    "condition": "",
-                    "requiredImports": get_component_imports(comp_type)
-                })
-    
-    return {
-        "selectedComponentId": None,
-        "shortcuts": shortcuts,
-        "components": ui_components,
-        "screens": screens if screens else [{"id": "screen-1", "name": "Home Page"}],
-        "activeScreenId": screens[0]["id"] if screens else "screen-1"
-    }
-
-
-def _build_blockly_manager(blockly: Dict, layouts: Dict) -> Dict[str, Any]:
-    """Build blocklyManager section"""
-    # Extract Blockly XML from workspace
-    xml = _generate_blockly_xml(blockly)
-    code = _generate_blockly_code(blockly)
-    
-    # Build componentProps from blockly blocks
-    component_props = []
-    blocks = blockly.get('workspace', {}).get('blocks', [])
-    
-    for block in blocks:
-        block_id = block.get('id', '')
-        comp_id = block.get('component', '')
-        event = block.get('event', '')
-        prop_name = block.get('property', '')
-        
-        if comp_id and event:
-            func_name = f"{comp_id}{event}"
-            component_props.append({
-                "type": "expression",
-                "value": func_name if event else "",
-                "propName": event if event else prop_name,
-                "blocklyId": block_id,
-                "elementId": comp_id,
-                "elementType": "WebSocket" if 'websocket' in code.lower() else None
-            })
-    
-    # Build blocklyByScreen
-    blockly_by_screen = {}
-    for screen_id in layouts.keys():
-        blockly_by_screen[screen_id] = {
-            "xml": xml,
-            "code": code,
-            "json": {},
-            "componentProps": component_props
-        }
-    
-    return {
-        "xml": xml,
-        "code": code,
-        "componentProps": component_props,
-        "selectedTypeID": blocks[0].get('component') if blocks else None,
-        "blocklyByScreen": blockly_by_screen
-    }
-
-
-def _generate_blockly_xml(blockly: Dict) -> str:
-    """Generate Blockly XML string from workspace"""
-    blocks = blockly.get('workspace', {}).get('blocks', [])
-    
-    xml_parts = ['<xml xmlns="https://developers.google.com/blockly/xml">']
-    
-    for block in blocks:
-        block_type = block.get('type', '')
-        block_id = block.get('id', '')
-        component = block.get('component', '')
-        event = block.get('event', '')
-        
-        if block_type == 'event' and component:
-            xml_parts.append(f'  <block type="button_on_click" id="{block_id}" x="450" y="90">')
-            xml_parts.append(f'    <mutation xmlns="http://www.w3.org/1999/xhtml" button_id="{component}"/>')
-            xml_parts.append(f'    <field name="BUTTON_ID">{component}</field>')
-            xml_parts.append('    <statement name="DO">')
-            
-            # Add nested blocks based on event
-            if event == 'onPress':
-                xml_parts.append(f'      <block type="websocket_send_text" id="gen_{block_id}">')
-                xml_parts.append(f'        <value name="TEXT">')
-                xml_parts.append(f'          <block type="text" id="txt_{block_id}">')
-                xml_parts.append(f'            <field name="TEXT">{component}</field>')
-                xml_parts.append('          </block>')
-                xml_parts.append('        </value>')
-                xml_parts.append('      </block>')
-            
-            xml_parts.append('    </statement>')
-            xml_parts.append('  </block>')
-    
-    xml_parts.append('</xml>')
-    return '\n'.join(xml_parts)
-
-
-def _generate_blockly_code(blockly: Dict) -> str:
-    """Generate JavaScript code from Blockly blocks"""
-    blocks = blockly.get('workspace', {}).get('blocks', [])
-    code_lines = []
-    
-    for block in blocks:
-        block_type = block.get('type', '')
-        component = block.get('component', '')
-        event = block.get('event', '')
-        
-        if block_type == 'event' and component and event:
-            func_name = f"{component}{event}"
-            code_lines.append(f"\nconst {func_name} = () => {{")
-            
-            if event == 'onPress':
-                code_lines.append(f"      sendWebSocketText('{component.lower()}');")
-            elif event == 'onCheckedChange':
-                code_lines.append(f"      updateAppState('{component}.checked', isChecked);")
-                code_lines.append(f"      if (isChecked == true) {{")
-                code_lines.append(f"        sendWebSocketText('on');")
-                code_lines.append(f"      }} else if (isChecked == false) {{")
-                code_lines.append(f"        sendWebSocketText('off');")
-                code_lines.append(f"      }}")
-            
-            code_lines.append("\n};")
-    
-    return '\n'.join(code_lines) if code_lines else ""
-
-
-def _generate_react_code(architecture: Dict, layouts: Dict, blockly: Dict, function_manager: Dict) -> str:
-    """Generate React/Tamagui component code"""
-    # Collect imports
-    imports = set()
-    imports.add("import React, { useState, useEffect, useCallback, useRef } from 'react';")
-    imports.add("import { SafeAreaView } from 'react-native-safe-area-context';")
-    imports.add("import { ScrollView, View } from 'react-native';")
-    
-    # Add Tamagui imports based on components
-    for screen_id, layout in layouts.items():
-        for comp in layout.get('components', []):
-            comp_type = comp.get('component_type', 'Text')
-            for imp in get_component_imports(comp_type):
-                imports.add(f"import {{ {imp['name']} }} from '{imp['source']}';")
-                
-    # Build component JSX
-    component_jsx = []
-    for screen_id, layout in layouts.items():
-        for comp in layout.get('components', []):
-            comp_id = comp.get('component_id')
-            comp_type = comp.get('component_type', 'Text')
-            ideeza_type = get_output_component_type(comp_type)
-            properties = comp.get('properties', {})
-            
-            style_prop = properties.get('style', {})
-            style_value = style_prop.get('value', {}) if isinstance(style_prop, dict) else {}
-            
-            # Generate JSX based on component type
-            if ideeza_type == 'Button':
-                jsx = f'''        <Button 
-            style={{ position: "absolute", top: {style_value.get('top', 0)}, left: {style_value.get('left', 0)}, width: {style_value.get('width', 280)}, height: {style_value.get('height', 44)} }}
-            size={{"$4"}}
-            color={{"white"}}
-            backgroundColor={{"$primary"}}
-            onPress={{{comp_id}onPress}}
-        >{_extract_prop_value(properties.get('value', 'Button'))}</Button>'''
-                component_jsx.append(jsx)
-            elif ideeza_type == 'Text_Content':
-                jsx = f'''        <XStack
-            style={{ position: "absolute", top: {style_value.get('top', 0)}, left: {style_value.get('left', 0)}, width: {style_value.get('width', 280)}, height: {style_value.get('height', 44)} }}
-        >
-            <Text fontSize={{"$4"}} color={{"$primary"}}>
-                {_extract_prop_value(properties.get('value', 'Text'))}
-            </Text>
-        </XStack>'''
-                component_jsx.append(jsx)
-            elif ideeza_type == 'Switch':
-                jsx = f'''        <XStack alignItems="center" style={{ position: "absolute", top: {style_value.get('top', 0)}, left: {style_value.get('left', 0)} }}>
-            <Switch
-                id="{comp_id}"
-                checked={{false}}
-                onCheckedChange={{{comp_id}onCheckedChange}}
-            >
-                <Switch.Thumb backgroundColor={{"$secondary"}}/>
-            </Switch>
-            <Label paddingLeft={{"$2"}}>{_extract_prop_value(properties.get('label', 'Switch'))}</Label>
-        </XStack>'''
-                component_jsx.append(jsx)
-            elif ideeza_type == 'List':
-                items = _extract_prop_value(properties.get('items', ['Item 1', 'Item 2']))
-                if not isinstance(items, list):
-                    items = [items]
-                list_items = '\n'.join(
-                    [f'            <Text key=\"{comp_id}_{idx}\" fontSize={{"$4"}} color={{"$primary"}}>• {item}</Text>' for idx, item in enumerate(items)]
-                )
-                jsx = f'''        <YStack
-            style={{ position: "absolute", top: {style_value.get('top', 0)}, left: {style_value.get('left', 0)}, width: {style_value.get('width', 280)}, minHeight: {style_value.get('height', 120)} }}
-            gap={{"$2"}}
-        >
-{list_items}
-        </YStack>'''
-                component_jsx.append(jsx)
-    
-    # Build function declarations
-    functions_code = []
-    functions = function_manager.get('functions', {})
-    for func_name, func_def in functions.items():
-        triggers = func_def.get('triggers', [])
-        if triggers:
-            comp_id = triggers[0].get('component', '')
-            event = triggers[0].get('event', '')
-            if event == 'onPress':
-                functions_code.append(f"\nconst {func_name} = () => {{\n      sendWebSocketText('{comp_id.lower()}');\n\n}};")
-    
-    # Assemble full code
-    code = '\n'.join(sorted(imports))
-    code += f'''
-
-function AppScreen1() {{
-  const [appState, setAppState] = useState({{
-'''
-    
-    # Add appState initial values
-    for screen_id, layout in layouts.items():
-        for comp in layout.get('components', []):
-            comp_id = comp.get('component_id')
-            properties = comp.get('properties', {})
-            style_prop = properties.get('style', {})
-            style_value = style_prop.get('value', {}) if isinstance(style_prop, dict) else {}
-            
-            code += f'''    "{comp_id}": {{
-      "text": "{_extract_prop_value(properties.get('value', ''))}",
-      "color": "{_extract_prop_value(properties.get('color', '$primary'))}",
-      "style": {{
-        "top": {style_value.get('top', 0)},
-        "left": {style_value.get('left', 0)},
-        "width": {style_value.get('width', 280)},
-        "height": {style_value.get('height', 44)}
-      }},
-'''
-            if comp.get('component_type') == 'Button':
-                code += f'''      "size": "$4",
-      "variant": "solid",
-      "borderColor": "$primary",
-      "borderWidth": "$thin",
-      "borderRadius": "$4",
-      "backgroundColor": "$primary",
-'''
-            code += '''    },
-'''
-    
-    code += '''  });
-
-'''
-    # Add helper functions
-    code += '''  const { screenWidth, screenHeight } = getScreenDimensions();
-  const maxContentHeight = getDimension('82.46%', screenHeight);
-
-  const getAppState = (path, defaultValue = null) => {
-    if (!path.includes('.')) {
-      return appState[path] || defaultValue;
-    }
-    return path.split('.').reduce((obj, key) => {
-      return (obj && obj[key] !== undefined) ? obj[key] : defaultValue;
-    }, appState);
-  };
-
-  const updateAppState = (path, value) => {
-    setAppState(prevState => {
-      const isFunctional = typeof value === 'function';
-      const resolve = (oldVal) => isFunctional ? value(oldVal) : (value === undefined ? null : value);
-      if (!path.includes('.')) {
-        const resolvedValue = resolve(prevState[path]);
-        return { ...prevState, [path]: resolvedValue };
-      }
-      const pathParts = path.split('.');
-      const rootKey = pathParts[0];
-      const leafKey = pathParts[pathParts.length - 1];
-      const nextState = { ...prevState };
-      const rootObject = { ...(prevState[rootKey] || {}) };
-      let current = rootObject;
-      for (let i = 1; i < pathParts.length - 1; i++) {
-        const key = pathParts[i];
-        current[key] = { ...(current[key] || {}) };
-        current = current[key];
-      }
-      const resolvedValue = resolve(current[leafKey]);
-      current[leafKey] = resolvedValue;
-      nextState[rootKey] = rootObject;
-      return nextState;
-    });
-  };
-
-'''
-    # Add generated functions
-    code += '\n'.join(functions_code)
-    
-    # Add return JSX
-    code += '''
-  return (
-    <SafeAreaView style={{ flex: 1, position: 'relative' }}>
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ minHeight: maxContentHeight, position: 'relative' }}>
-'''
-    code += '\n'.join(component_jsx)
-    code += '''
-      </ScrollView>
-    </SafeAreaView>
-  );
-}
-
-export default AppScreen1;
-'''
-    
-    return code
-
-
-def _extract_prop_value(prop: Any) -> Any:
-    """Extract raw value from PropertyValue object or dict"""
-    if prop is None:
-        return ""
-    if isinstance(prop, dict):
-        return prop.get('value', prop)
-    if hasattr(prop, 'value'):
-        return prop.value
+def _unwrap(prop: Any) -> Any:
+    """Unwrap a {type, value} envelope if present."""
+    if isinstance(prop, dict) and "value" in prop:
+        return prop["value"]
     return prop
 
 
-def _create_fallback_output(error: str) -> Dict[str, Any]:
-    """Create minimal valid output on formatter error"""
+def _wrap(value: Any) -> Dict[str, Any]:
+    """Wrap a value in the ideeza {type: 'literal'} envelope."""
+    return {"type": "literal", "value": value}
+
+
+def _screen_display_name(screen_id: str) -> str:
+    return screen_id.replace("_", " ").replace("-", " ").title()
+
+
+def _extract_style(raw_props: Dict[str, Any]) -> Dict[str, int]:
+    """Extract {top, left, width, height} from component properties."""
+    raw = _unwrap(raw_props.get("style", {}))
+    if not isinstance(raw, dict):
+        raw = {}
     return {
-        "importManager": {"globalImports": [], "componentImports": {}},
-        "stateManager": {"appState": {}},
-        "functionManager": {"functions": {}},
-        "componentManager": {
-            "components": {},
-            "roots": [],
-            "stateManager": {"appState": {}},
-            "importManager": {"globalImports": [], "componentImports": {}},
-            "functionManager": {"functions": {}}
-        },
-        "uiManager": {
-            "selectedComponentId": None,
-            "shortcuts": [],
-            "components": [],
-            "screens": [{"id": "screen-1", "name": "Home Page"}],
-            "activeScreenId": "screen-1"
-        },
-        "blocklyManager": {
-            "xml": "<xml xmlns=\"https://developers.google.com/blockly/xml\"></xml>",
-            "code": "",
-            "componentProps": [],
-            "selectedTypeID": None,
-            "blocklyByScreen": {}
-        },
-        "code": "// Error generating code: " + error,
-        "_error": error,
-        "_fallback": True
+        "top":    raw.get("top",    raw.get("y", 64)),
+        "left":   raw.get("left",   raw.get("x", 137)),
+        "width":  raw.get("width",  100),
+        "height": raw.get("height", 50),
     }
 
 
-def validate_output_schema(output: Dict[str, Any]) -> tuple[bool, List[str]]:
+def _extract_label(comp_type: str, raw_props: Dict[str, Any], comp_id: str) -> str:
     """
-    Validate that output matches expected ideeza schema.
-    
-    Returns:
-        Tuple of (is_valid, list_of_errors)
+    Best-effort extraction of display label from various prop shapes:
+      - props.properties.value.text.value   (structured LLM path)
+      - props.value.value                   (raw heuristic path)
+      - props.component_id.value            (semantic name)
+      - fallback: humanise comp_id
     """
-    errors = []
-    required_keys = [
-        "importManager", "stateManager", "functionManager",
-        "componentManager", "uiManager", "blocklyManager", "code"
+    # Structured LLM: props.properties.value.text.value
+    nested_props = _unwrap(raw_props.get("properties", {}))
+    if isinstance(nested_props, dict):
+        text_field = nested_props.get("text")
+        if text_field is not None:
+            v = _unwrap(text_field)
+            if v not in (None, ""):
+                return str(v)
+
+    # Semantic component_id
+    sem_id = _unwrap(raw_props.get("component_id", ""))
+    if sem_id:
+        return str(sem_id).replace("_", " ").replace("-", " ").title()
+
+    # Raw heuristic value field
+    val = _unwrap(raw_props.get("value", ""))
+    if val and val not in ("Button", "Sample Text", "Click Me"):
+        return str(val)
+
+    # Humanise comp_id as last resort
+    human = _sanitize_id(comp_id).replace("_", " ").title()
+    return human if human else ("Text Content" if _ideeza_type(comp_type) == "Text_Content" else "Button")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Semantic prop builders
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _build_button_props(
+    style: Dict, label: str
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Returns (ideeza_props_dict, state_entry_dict) for a Button."""
+    props = {
+        "size":            _wrap("$4"),
+        "text":            _wrap(label),
+        "color":           _wrap("white"),
+        "style":           _wrap(style),
+        "variant":         _wrap("solid"),
+        "borderColor":     _wrap("$primary"),
+        "borderWidth":     _wrap("$thin"),
+        "borderRadius":    _wrap("$4"),
+        "backgroundColor": _wrap("$primary"),
+    }
+    state = {
+        "size":            "$4",
+        "text":            label,
+        "color":           "white",
+        "style":           style,
+        "variant":         "solid",
+        "borderColor":     "$primary",
+        "borderWidth":     "$thin",
+        "borderRadius":    "$4",
+        "backgroundColor": "$primary",
+    }
+    return props, state
+
+
+def _build_text_props(
+    style: Dict, label: str
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Returns (ideeza_props_dict, state_entry_dict) for a Text_Content."""
+    props = {
+        "text":            _wrap(label),
+        "color":           _wrap("$color"),
+        "style":           _wrap(style),
+        "fontSize":        _wrap("$5"),
+        "backgroundColor": _wrap("transparent"),
+    }
+    state = {
+        "text":            label,
+        "color":           "$color",
+        "style":           style,
+        "fontSize":        "$5",
+        "backgroundColor": "transparent",
+    }
+    return props, state
+
+
+def _build_semantic_props(
+    raw_type: str,
+    raw_props: Dict[str, Any],
+    comp_id: str,
+) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Dispatch to the correct prop builder based on component type."""
+    ideeza_type = _ideeza_type(raw_type)
+    style = _extract_style(raw_props)
+    label = _extract_label(raw_type, raw_props, comp_id)
+
+    if ideeza_type == "Button":
+        return _build_button_props(style, label)
+    else:
+        return _build_text_props(style, label)
+
+
+def _build_component_entry(
+    comp_id: str,
+    ideeza_type: str,
+    props: Dict[str, Any],
+    screen_id: str,
+    parent_id: Optional[str],
+    children: List[str],
+) -> Dict[str, Any]:
+    return {
+        "id":              comp_id,
+        "name":            comp_id,
+        "type":            ideeza_type,
+        "props":           props,
+        "events":          {},
+        "children":        children or [],
+        "parentId":        parent_id or "root",
+        "screenId":        screen_id,
+        "condition":       "",
+        "requiredImports": _get_imports(ideeza_type),
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Blockly helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _make_ws_blockly_entry(comp_id: str, y_pos: int) -> Tuple[str, str, str]:
+    """Returns (xml_block_str, code_line, function_name) for a WebSocket button."""
+    fn_name = f"{comp_id}onPress"
+    block_id = f"block_{comp_id}"
+    xml = (
+        f'  <block type="button_on_click" id="{block_id}" x="450" y="{y_pos}">\n'
+        f'    <mutation xmlns="http://www.w3.org/1999/xhtml" button_id="{comp_id}"/>\n'
+        f'    <field name="BUTTON_ID">{comp_id}</field>\n'
+        f'    <statement name="DO">\n'
+        f'      <block type="websocket_send_text" id="gen_{comp_id}">\n'
+        f'        <value name="TEXT">\n'
+        f'          <block type="text">\n'
+        f'            <field name="TEXT">{comp_id}</field>\n'
+        f'          </block>\n'
+        f'        </value>\n'
+        f'      </block>\n'
+        f'    </statement>\n'
+        f'  </block>'
+    )
+    code = f"const {fn_name} = () => {{\n  sendWebSocketText('{comp_id}');\n}};"
+    return xml, code, fn_name
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# React code generation
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _generate_react_code(
+    components: Dict[str, Any],
+    functions: Dict[str, Any],
+    state_app: Dict[str, Any],
+    active_screen: str,
+) -> str:
+    lines = [
+        "import React, { useState, useEffect, useCallback, useRef } from 'react';",
+        "import { Button, Text, XStack } from 'tamagui';",
+        "import { SafeAreaView } from 'react-native-safe-area-context';",
+        "import { ScrollView, View } from 'react-native';",
+        "import { getDimension, getScreenDimensions } from '../utils/dimensions';",
+        "import { useNavigation } from '@react-navigation/native';",
+        "import { useWebSocket } from '../hooks/useWebSocket';",
+        "",
+        "function AppScreen1() {",
+        "  const navigation = useNavigation();",
+        "  const {",
+        "    sendWebSocketText,",
+        "    connectWebSocket,",
+        "    isWebSocketConnected,",
+        "  } = useWebSocket();",
+        "",
+        f"  const [appState, setAppState] = useState({json.dumps(state_app, indent=4)});",
+        "",
+        "  const { screenWidth, screenHeight } = getScreenDimensions();",
+        "  const maxContentHeight = getDimension('88.46%', screenHeight);",
+        "",
+        "  const getAppState = (path, defaultValue = null) => {",
+        "    if (!path.includes('.')) return appState[path] ?? defaultValue;",
+        "    return path.split('.').reduce(",
+        "      (obj, key) => (obj && obj[key] !== undefined ? obj[key] : defaultValue),",
+        "      appState",
+        "    );",
+        "  };",
+        "",
+        "  const updateAppState = (path, value) => {",
+        "    setAppState(prev => {",
+        "      const resolve = (old) => typeof value === 'function' ? value(old) : value;",
+        "      if (!path.includes('.')) return { ...prev, [path]: resolve(prev[path]) };",
+        "      const parts = path.split('.');",
+        "      const next = { ...prev };",
+        "      const root = { ...(prev[parts[0]] || {}) };",
+        "      let cur = root;",
+        "      for (let i = 1; i < parts.length - 1; i++) {",
+        "        cur[parts[i]] = { ...(cur[parts[i]] || {}) };",
+        "        cur = cur[parts[i]];",
+        "      }",
+        "      cur[parts[parts.length - 1]] = resolve(cur[parts[parts.length - 1]]);",
+        "      next[parts[0]] = root;",
+        "      return next;",
+        "    });",
+        "  };",
+        "",
     ]
-    
-    for key in required_keys:
-        if key not in output:
-            errors.append(f"Missing required key: {key}")
-    
-    # Validate importManager
-    if "importManager" in output:
-        im = output["importManager"]
-        if "globalImports" not in im or not isinstance(im["globalImports"], list):
-            errors.append("importManager.globalImports must be a list")
-        if "componentImports" not in im or not isinstance(im["componentImports"], dict):
-            errors.append("importManager.componentImports must be a dict")
-    
-    # Validate stateManager
-    if "stateManager" in output:
-        sm = output["stateManager"]
-        if "appState" not in sm or not isinstance(sm["appState"], dict):
-            errors.append("stateManager.appState must be a dict")
-    
-    # Validate componentManager
-    if "componentManager" in output:
-        cm = output["componentManager"]
-        if "components" not in cm or not isinstance(cm["components"], dict):
-            errors.append("componentManager.components must be a dict")
-        if "roots" not in cm or not isinstance(cm["roots"], list):
-            errors.append("componentManager.roots must be a list")
-    
-    # Validate uiManager
-    if "uiManager" in output:
-        um = output["uiManager"]
-        if "screens" not in um or not isinstance(um["screens"], list):
-            errors.append("uiManager.screens must be a list")
-        if "activeScreenId" not in um:
-            errors.append("uiManager.activeScreenId is required")
-    
-    # Validate blocklyManager
-    if "blocklyManager" in output:
-        bm = output["blocklyManager"]
-        if "xml" not in bm or not isinstance(bm["xml"], str):
-            errors.append("blocklyManager.xml must be a string")
-        if "code" not in bm or not isinstance(bm["code"], str):
-            errors.append("blocklyManager.code must be a string")
-    
-    # Validate code
-    if "code" not in output or not isinstance(output["code"], str):
-        errors.append("code must be a string")
-    
+
+    for fn_name, fn_def in functions.items():
+        lines.append(f"  const {fn_name} = () => {{")
+        lines.append(f"    {fn_def.get('body', '')}")
+        lines.append("  };")
+        lines.append("")
+
+    lines += [
+        "  return (",
+        "    <SafeAreaView style={{ flex: 1, position: 'relative' }}>",
+        "      <ScrollView",
+        "        style={{ flex: 1 }}",
+        "        contentContainerStyle={{ minHeight: maxContentHeight, position: 'relative' }}",
+        "      >",
+    ]
+
+    for comp_id, comp in components.items():
+        if comp.get("screenId") != active_screen:
+            continue
+        comp_type = comp.get("type", "Text_Content")
+        style_val = _unwrap(comp["props"].get("style", _wrap({})))
+        if not isinstance(style_val, dict):
+            style_val = {}
+        t = style_val.get("top", 0)
+        left = style_val.get("left", 0)
+        w = style_val.get("width", 100)
+        h = style_val.get("height", 50)
+
+        if comp_type == "Button":
+            fn = f"{comp_id}onPress"
+            lines.append(
+                f"        <Button\n"
+                f"          style={{{{ position: 'absolute', top: getDimension({t}, screenHeight), left: getDimension({left}, screenWidth), width: getDimension({w}, screenWidth), height: getDimension({h}, screenHeight) }}}}\n"
+                f"          size={{getAppState('{comp_id}.size', '$4')}}\n"
+                f"          color={{getAppState('{comp_id}.variant', 'solid') === 'outline' ? getAppState('{comp_id}.borderColor', '$primary') : getAppState('{comp_id}.color', 'white')}}\n"
+                f"          backgroundColor={{getAppState('{comp_id}.variant', 'solid') === 'solid' ? getAppState('{comp_id}.backgroundColor', '$primary') : 'transparent'}}\n"
+                f"          borderColor={{getAppState('{comp_id}.borderColor', '$primary')}}\n"
+                f"          borderRadius={{getAppState('{comp_id}.borderRadius', '$4')}}\n"
+                f"          onPress={{{fn}}}\n"
+                f"        >{{getAppState('{comp_id}.text', 'Button')}}</Button>"
+            )
+        else:
+            lines.append(
+                f"        <XStack\n"
+                f"          style={{{{ position: 'absolute', top: getDimension({t}, screenHeight), left: getDimension({left}, screenWidth), width: getDimension({w}, screenWidth), height: getDimension({h}, screenHeight) }}}}\n"
+                f"          backgroundColor={{getAppState('{comp_id}.backgroundColor', 'transparent')}}\n"
+                f"        >\n"
+                f"          <Text\n"
+                f"            fontSize={{getAppState('{comp_id}.fontSize', '$5')}}\n"
+                f"            color={{getAppState('{comp_id}.color', '$color')}}\n"
+                f"            style={{{{ width: '100%', height: '100%' }}}}\n"
+                f"          >{{getAppState('{comp_id}.text', 'Text Content')}}</Text>\n"
+                f"        </XStack>"
+            )
+
+    lines += [
+        "      </ScrollView>",
+        "    </SafeAreaView>",
+        "  );",
+        "}",
+        "",
+        "export default AppScreen1;",
+    ]
+
+    return "\n".join(lines)
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Path A – already-structured input (result.componentManager.components exists)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _from_structured(result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert a result that already has componentManager/uiManager/etc.
+    Fixes:
+      - stateManager keys  → use comp_id directly (not {screenId}_{compId})
+      - component props    → semantic flat props matching ideeza schema
+      - blocklyByScreen    → extract from blocklyManager and promote to root level
+      - componentManager.importManager → empty (FE derives from code string)
+    """
+    raw_comps: Dict[str, Any] = result.get("componentManager", {}).get("components", {})
+    bm_raw: Dict[str, Any] = dict(result.get("blocklyManager", {}))  # shallow copy to mutate
+
+    components: Dict[str, Any] = {}
+    state_app: Dict[str, Any] = {}
+    roots: List[str] = []
+    ui_components: List[Dict] = []
+    screens_map: Dict[str, str] = {}
+    functions: Dict[str, Any] = {}
+    xml_blocks: List[str] = []
+    code_lines: List[str] = []
+    comp_props_list: List[Dict] = []
+    y_pos = 90
+
+    for comp_id, raw_comp in raw_comps.items():
+        raw_type = _reverse_ideeza_type(raw_comp.get("type", "Text_Content"))
+        ideeza_type = _ideeza_type(raw_type)
+        raw_props = raw_comp.get("props", {})
+        screen_id = raw_comp.get("screenId", "screen-1")
+        screens_map[screen_id] = screen_id
+
+        props, state = _build_semantic_props(raw_type, raw_props, comp_id)
+        state_app[comp_id] = state
+
+        comp_obj = _build_component_entry(
+            comp_id=comp_id,
+            ideeza_type=ideeza_type,
+            props=props,
+            screen_id=screen_id,
+            parent_id=raw_comp.get("parentId"),
+            children=raw_comp.get("children", []),
+        )
+        components[comp_id] = comp_obj
+        roots.append(comp_id)
+        ui_components.append(comp_obj)
+
+        if ideeza_type == "Button":
+            fn_name = f"{comp_id}onPress"
+            functions[fn_name] = {
+                "name":       fn_name,
+                "parameters": [],
+                "returnType": "void",
+                "body":       f"sendWebSocketText('{comp_id}');",
+                "triggers":   [{"component": comp_id, "event": "onPress"}],
+            }
+            xml, code_line, _ = _make_ws_blockly_entry(comp_id, y_pos)
+            xml_blocks.append(xml)
+            code_lines.append(code_line)
+            comp_props_list.append({
+                "type":        "expression",
+                "value":       fn_name,
+                "propName":    "onPress",
+                "blocklyId":   f"block_{comp_id}",
+                "elementId":   comp_id,
+                "elementType": "WebSocket",
+            })
+            y_pos += 100
+
+    screens = [
+        {"id": sid, "name": _screen_display_name(sid)}
+        for sid in (screens_map or {"screen-1": "screen-1"})
+    ]
+    active_screen = screens[0]["id"]
+
+    # Pull blocklyByScreen out of blocklyManager (it must live at root)
+    bly_by_screen: Dict[str, Any] = bm_raw.pop("blocklyByScreen", {})
+    if not bly_by_screen:
+        bly_by_screen = result.get("blocklyByScreen", {})
+
+    # If still empty, rebuild from what we have
+    if not bly_by_screen:
+        xml_str = (
+            '<xml xmlns="https://developers.google.com/blockly/xml">\n'
+            + "\n".join(xml_blocks)
+            + "\n</xml>"
+        )
+        code_str = "\n\n".join(code_lines)
+        for sid in screens_map:
+            bly_by_screen[sid] = {
+                "xml":            xml_str,
+                "code":           code_str,
+                "json":           {},
+                "componentProps": comp_props_list,
+            }
+
+    # Ensure every screen entry has the required 'json' key
+    for sid, entry in bly_by_screen.items():
+        entry.setdefault("json", {})
+
+    # Use blockly data from raw result if present (richer), else rebuild
+    bm_xml  = bm_raw.get("xml",  bly_by_screen.get(active_screen, {}).get("xml",  EMPTY_XML))
+    bm_code = bm_raw.get("code", bly_by_screen.get(active_screen, {}).get("code", ""))
+    bm_props = bm_raw.get("componentProps", comp_props_list)
+    bm_selected = bm_raw.get("selectedTypeID", roots[0] if roots else None)
+
+    blockly_manager = {
+        "xml":            bm_xml,
+        "code":           bm_code,
+        "componentProps": bm_props,
+        "selectedTypeID": bm_selected,
+    }
+
+    state_manager    = {"appState": state_app}
+    function_manager = result.get("functionManager", {"functions": functions}) if functions else EMPTY_FUNCTION_MANAGER
+    # Use pre-existing code if available (it's richer); otherwise generate
+    code = result.get("code") or _generate_react_code(components, functions, state_app, active_screen)
+
+    return {
+        "importManager":   EMPTY_IMPORT_MANAGER,
+        "stateManager":    state_manager,
+        "functionManager": function_manager,
+        "componentManager": {
+            "components":      components,
+            "roots":           roots,
+            "stateManager":    state_manager,
+            "importManager":   EMPTY_IMPORT_MANAGER.copy(),
+            "functionManager": EMPTY_FUNCTION_MANAGER.copy(),
+        },
+        "uiManager": {
+            "selectedComponentId": None,
+            "shortcuts":           UI_SHORTCUTS,
+            "components":          ui_components,
+            "screens":             screens,
+            "activeScreenId":      active_screen,
+        },
+        "code":            code,
+        "blocklyManager":  blockly_manager,
+        "blocklyByScreen": bly_by_screen,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Path B – raw heuristic input (raw_result.layout / raw_result.architecture)
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _from_raw(raw_result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Build full ideeza output from the heuristic/minimal raw_result format.
+    """
+    layouts: Dict[str, Any] = raw_result.get("layout", {})
+
+    components: Dict[str, Any] = {}
+    state_app: Dict[str, Any] = {}
+    roots: List[str] = []
+    ui_components: List[Dict] = []
+    screens_map: Dict[str, str] = {}
+    functions: Dict[str, Any] = {}
+    xml_blocks: List[str] = []
+    code_lines: List[str] = []
+    comp_props_list: List[Dict] = []
+    y_pos = 90
+
+    for screen_id, layout_data in layouts.items():
+        screens_map[screen_id] = screen_id
+        raw_comps_list = (
+            layout_data.get("components", [])
+            if isinstance(layout_data, dict)
+            else []
+        )
+
+        for raw_comp in raw_comps_list:
+            comp_id  = raw_comp.get("component_id", f"comp_{len(components)}")
+            comp_type = raw_comp.get("component_type", "Text")
+            ideeza_type = _ideeza_type(comp_type)
+
+            props, state = _build_semantic_props(comp_type, raw_comp.get("properties", {}), comp_id)
+            state_app[comp_id] = state
+
+            comp_obj = _build_component_entry(
+                comp_id=comp_id,
+                ideeza_type=ideeza_type,
+                props=props,
+                screen_id=screen_id,
+                parent_id=raw_comp.get("parent_id"),
+                children=raw_comp.get("children_ids", []),
+            )
+            components[comp_id] = comp_obj
+            roots.append(comp_id)
+            ui_components.append(comp_obj)
+
+            if ideeza_type == "Button":
+                fn_name = f"{comp_id}onPress"
+                functions[fn_name] = {
+                    "name":       fn_name,
+                    "parameters": [],
+                    "returnType": "void",
+                    "body":       f"sendWebSocketText('{comp_id}');",
+                    "triggers":   [{"component": comp_id, "event": "onPress"}],
+                }
+                xml, code_line, _ = _make_ws_blockly_entry(comp_id, y_pos)
+                xml_blocks.append(xml)
+                code_lines.append(code_line)
+                comp_props_list.append({
+                    "type":        "expression",
+                    "value":       fn_name,
+                    "propName":    "onPress",
+                    "blocklyId":   f"block_{comp_id}",
+                    "elementId":   comp_id,
+                    "elementType": "WebSocket",
+                })
+                y_pos += 100
+
+    if not screens_map:
+        screens_map = {"screen-1": "screen-1"}
+
+    screens = [{"id": sid, "name": _screen_display_name(sid)} for sid in screens_map]
+    active_screen = screens[0]["id"]
+
+    xml_str  = '<xml xmlns="https://developers.google.com/blockly/xml">\n' + "\n".join(xml_blocks) + "\n</xml>"
+    code_str = "\n\n".join(code_lines)
+
+    bly_by_screen: Dict[str, Any] = {
+        sid: {"xml": xml_str, "code": code_str, "json": {}, "componentProps": comp_props_list}
+        for sid in screens_map
+    }
+    blockly_manager = {
+        "xml":            xml_str,
+        "code":           code_str,
+        "componentProps": comp_props_list,
+        "selectedTypeID": roots[0] if roots else None,
+    }
+
+    state_manager    = {"appState": state_app}
+    function_manager = {"functions": functions}
+    code = _generate_react_code(components, functions, state_app, active_screen)
+
+    return {
+        "importManager":   EMPTY_IMPORT_MANAGER.copy(),
+        "stateManager":    state_manager,
+        "functionManager": function_manager,
+        "componentManager": {
+            "components":      components,
+            "roots":           roots,
+            "stateManager":    state_manager,
+            "importManager":   EMPTY_IMPORT_MANAGER.copy(),
+            "functionManager": EMPTY_FUNCTION_MANAGER.copy(),
+        },
+        "uiManager": {
+            "selectedComponentId": None,
+            "shortcuts":           UI_SHORTCUTS,
+            "components":          ui_components,
+            "screens":             screens,
+            "activeScreenId":      active_screen,
+        },
+        "code":            code,
+        "blocklyManager":  blockly_manager,
+        "blocklyByScreen": bly_by_screen,
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Validation
+# ──────────────────────────────────────────────────────────────────────────────
+
+def validate_output(output: Dict[str, Any]) -> Tuple[bool, List[str]]:
+    errors: List[str] = []
+
+    for k in REQUIRED_TOP_LEVEL_KEYS:
+        if k not in output:
+            errors.append(f"Missing top-level key: '{k}'")
+
+    if "blocklyByScreen" in output.get("blocklyManager", {}):
+        errors.append("CRITICAL: blocklyByScreen must be at root level, not inside blocklyManager")
+
+    bm = output.get("blocklyManager", {})
+    for k in ("xml", "code", "componentProps", "selectedTypeID"):
+        if k not in bm:
+            errors.append(f"blocklyManager missing key: '{k}'")
+
+    bbs = output.get("blocklyByScreen", {})
+    if not isinstance(bbs, dict):
+        errors.append("blocklyByScreen must be an object")
+    else:
+        for sid, entry in bbs.items():
+            for k in ("xml", "code", "json", "componentProps"):
+                if k not in entry:
+                    errors.append(f"blocklyByScreen.{sid} missing key: '{k}'")
+
+    cm = output.get("componentManager", {})
+    for k in ("components", "roots", "stateManager", "importManager", "functionManager"):
+        if k not in cm:
+            errors.append(f"componentManager missing key: '{k}'")
+
+    um = output.get("uiManager", {})
+    for k in ("selectedComponentId", "shortcuts", "components", "screens", "activeScreenId"):
+        if k not in um:
+            errors.append(f"uiManager missing key: '{k}'")
+
+    # stateManager keys must match componentManager.components keys
+    sm_keys  = set(output.get("stateManager", {}).get("appState", {}).keys())
+    comp_keys = set(output.get("componentManager", {}).get("components", {}).keys())
+    orphan = sm_keys - comp_keys
+    if orphan:
+        errors.append(f"stateManager has keys not in componentManager.components: {orphan}")
+
     return len(errors) == 0, errors
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Fallback
+# ──────────────────────────────────────────────────────────────────────────────
+
+def _fallback_output(error: str) -> Dict[str, Any]:
+    empty_state = {"appState": {}}
+    screen = [{"id": "screen-1", "name": "Home Page"}]
+    bly_entry = {"xml": EMPTY_XML, "code": "", "json": {}, "componentProps": []}
+    return {
+        "importManager":   EMPTY_IMPORT_MANAGER.copy(),
+        "stateManager":    empty_state,
+        "functionManager": EMPTY_FUNCTION_MANAGER.copy(),
+        "componentManager": {
+            "components":      {},
+            "roots":           [],
+            "stateManager":    empty_state,
+            "importManager":   EMPTY_IMPORT_MANAGER.copy(),
+            "functionManager": EMPTY_FUNCTION_MANAGER.copy(),
+        },
+        "uiManager": {
+            "selectedComponentId": None,
+            "shortcuts":           UI_SHORTCUTS,
+            "components":          [],
+            "screens":             screen,
+            "activeScreenId":      "screen-1",
+        },
+        "code":            f"// Formatter error: {error}",
+        "blocklyManager":  {"xml": EMPTY_XML, "code": "", "componentProps": [], "selectedTypeID": None},
+        "blocklyByScreen": {"screen-1": bly_entry},
+    }
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Main entry point
+# ──────────────────────────────────────────────────────────────────────────────
+
+def format_pipeline_output(raw_input: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Transform AI pipeline output into the ideeza-project JSON schema.
+
+    Detection logic:
+      1. If raw_input.result.componentManager.components is non-empty  → Path A (structured)
+      2. If raw_input.raw_result has layout / architecture             → Path B (raw)
+      3. If raw_input itself has layout / architecture                  → Path B (raw)
+      4. Otherwise attempt Path A on raw_input.result
+    """
+    try:
+        result = raw_input.get("result", raw_input)
+
+        # Path A: structured output
+        if (
+            isinstance(result.get("componentManager"), dict)
+            and result["componentManager"].get("components")
+        ):
+            logger.info("Input type: structured (Path A)")
+            output = _from_structured(result)
+
+        # Path B: raw_result wrapper
+        elif "raw_result" in raw_input and isinstance(raw_input["raw_result"], dict):
+            logger.info("Input type: raw_result wrapper (Path B)")
+            output = _from_raw(raw_input["raw_result"])
+
+        # Path B: flat raw
+        elif "layout" in result or "architecture" in result:
+            logger.info("Input type: flat raw (Path B)")
+            output = _from_raw(result)
+
+        # Fallback to Path A
+        else:
+            logger.warning("Input type unknown – attempting Path A")
+            output = _from_structured(result)
+
+        is_valid, errors = validate_output(output)
+        if is_valid:
+            logger.info("✓ Output validated successfully. Components: %d", len(output["componentManager"]["components"]))
+        else:
+            logger.warning("Validation warnings:\n  %s", "\n  ".join(errors))
+
+        return output
+
+    except Exception as exc:
+        logger.exception("Formatter failed: %s", exc)
+        return _fallback_output(str(exc))
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# NEW: Export‑ready JSON helpers
+# ──────────────────────────────────────────────────────────────────────────────
+
+def ensure_export_schema(data: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Guarantee that the dictionary contains all required top‑level keys of the
+    ideeza‑project schema. If any key is missing, it is added with a sensible
+    default value.
+    """
+    # Deep copy to avoid mutating the original
+    result = data.copy()
+
+    # 1. importManager
+    if "importManager" not in result:
+        result["importManager"] = EMPTY_IMPORT_MANAGER.copy()
+    else:
+        # Ensure subkeys exist
+        im = result["importManager"]
+        if not isinstance(im, dict):
+            im = {}
+        im.setdefault("globalImports", [])
+        im.setdefault("componentImports", {})
+        result["importManager"] = im
+
+    # 2. stateManager (must have appState)
+    if "stateManager" not in result:
+        result["stateManager"] = {"appState": {}}
+    else:
+        sm = result["stateManager"]
+        if not isinstance(sm, dict):
+            sm = {}
+        sm.setdefault("appState", {})
+        result["stateManager"] = sm
+
+    # 3. functionManager
+    if "functionManager" not in result:
+        result["functionManager"] = EMPTY_FUNCTION_MANAGER.copy()
+    else:
+        fm = result["functionManager"]
+        if not isinstance(fm, dict):
+            fm = {}
+        fm.setdefault("functions", {})
+        result["functionManager"] = fm
+
+    # 4. componentManager (complex object)
+    if "componentManager" not in result:
+        result["componentManager"] = {
+            "components": {},
+            "roots": [],
+            "stateManager": result.get("stateManager", {"appState": {}}),
+            "importManager": result.get("importManager", EMPTY_IMPORT_MANAGER.copy()),
+            "functionManager": result.get("functionManager", EMPTY_FUNCTION_MANAGER.copy()),
+        }
+    else:
+        cm = result["componentManager"]
+        if not isinstance(cm, dict):
+            cm = {}
+        cm.setdefault("components", {})
+        cm.setdefault("roots", [])
+        cm.setdefault("stateManager", result.get("stateManager", {"appState": {}}))
+        cm.setdefault("importManager", result.get("importManager", EMPTY_IMPORT_MANAGER.copy()))
+        cm.setdefault("functionManager", result.get("functionManager", EMPTY_FUNCTION_MANAGER.copy()))
+        result["componentManager"] = cm
+
+    # 5. uiManager
+    if "uiManager" not in result:
+        result["uiManager"] = {
+            "selectedComponentId": None,
+            "shortcuts": UI_SHORTCUTS,
+            "components": [],
+            "screens": [{"id": "screen-1", "name": "Home Page"}],
+            "activeScreenId": "screen-1",
+        }
+    else:
+        um = result["uiManager"]
+        if not isinstance(um, dict):
+            um = {}
+        um.setdefault("selectedComponentId", None)
+        um.setdefault("shortcuts", UI_SHORTCUTS)
+        um.setdefault("components", [])
+        um.setdefault("screens", [{"id": "screen-1", "name": "Home Page"}])
+        um.setdefault("activeScreenId", "screen-1")
+        result["uiManager"] = um
+
+    # 6. code (string)
+    if "code" not in result:
+        result["code"] = "// No code generated"
+
+    # 7. blocklyManager
+    if "blocklyManager" not in result:
+        result["blocklyManager"] = {
+            "xml": EMPTY_XML,
+            "code": "",
+            "componentProps": [],
+            "selectedTypeID": None,
+        }
+    else:
+        bm = result["blocklyManager"]
+        if not isinstance(bm, dict):
+            bm = {}
+        bm.setdefault("xml", EMPTY_XML)
+        bm.setdefault("code", "")
+        bm.setdefault("componentProps", [])
+        bm.setdefault("selectedTypeID", None)
+        result["blocklyManager"] = bm
+
+    # 8. blocklyByScreen
+    if "blocklyByScreen" not in result:
+        # Use the active screen from uiManager if possible
+        active = result.get("uiManager", {}).get("activeScreenId", "screen-1")
+        result["blocklyByScreen"] = {
+            active: {
+                "xml": result["blocklyManager"]["xml"],
+                "code": result["blocklyManager"]["code"],
+                "json": {},
+                "componentProps": result["blocklyManager"]["componentProps"],
+            }
+        }
+    else:
+        bbs = result["blocklyByScreen"]
+        if not isinstance(bbs, dict):
+            bbs = {}
+        for sid, entry in bbs.items():
+            if not isinstance(entry, dict):
+                entry = {}
+            entry.setdefault("xml", result["blocklyManager"]["xml"])
+            entry.setdefault("code", result["blocklyManager"]["code"])
+            entry.setdefault("json", {})
+            entry.setdefault("componentProps", result["blocklyManager"]["componentProps"])
+            bbs[sid] = entry
+        result["blocklyByScreen"] = bbs
+
+    return result
+
+
+def get_export_ready_json(raw_input: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Convert any pipeline output (raw or structured) into a clean, export‑ready
+    ideeza‑project JSON object. This function strips away all task‑metadata
+    and ensures that every required field exists.
+    """
+    # Step 1: Run the core formatter to get the base ideeza structure
+    base = format_pipeline_output(raw_input)
+
+    # Step 2: Apply the safety defaults to fill any accidentally missing fields
+    export_ready = ensure_export_schema(base)
+
+    # Step 3: (Optional) final validation – if errors remain, log them
+    is_valid, errors = validate_output(export_ready)
+    if not is_valid:
+        logger.warning("Export-ready output has validation warnings:\n  %s", "\n  ".join(errors))
+
+    return export_ready
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# CLI
+# ──────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s  %(message)s")
+
+    # Simple CLI: if argument is provided, read that file; otherwise read stdin.
+    # If the flag --export is present, call get_export_ready_json instead of format_pipeline_output.
+    export_mode = "--export" in sys.argv
+    if export_mode:
+        sys.argv.remove("--export")
+
+    if len(sys.argv) > 1:
+        with open(sys.argv[1]) as fh:
+            data = json.load(fh)
+    else:
+        data = json.load(sys.stdin)
+
+    if export_mode:
+        result = get_export_ready_json(data)
+        logger.info("Export‑ready JSON generated.")
+    else:
+        result = format_pipeline_output(data)
+
+    # Always print the final JSON to stdout (so it can be piped or saved)
+    print(json.dumps(result, indent=2, ensure_ascii=False))
