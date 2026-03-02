@@ -769,7 +769,13 @@ class LayoutGenerator:
         for idx, comp_data in enumerate(components_data):
             try:
                 comp_id = comp_data.get('id', f"comp_{screen_id}_{idx}")
-                raw_comp_type = comp_data.get('type', 'Text')
+                raw_comp_type = (
+                    comp_data.get('component_type')
+                    or comp_data.get('type')
+                    or comp_data.get('component')
+                    or comp_data.get('name')
+                    or 'Text'
+                )
                 
                 # ✅ Normalize component type
                 comp_type = self._normalize_component_type(raw_comp_type)
@@ -906,7 +912,8 @@ class LayoutGenerator:
         components = []
         current_y = self.safe_area_top + 20
         
-        for idx, raw_comp_type in enumerate(screen.components):
+        for idx, raw_comp in enumerate(screen.components):
+            raw_comp_type = raw_comp.get('component_type') if isinstance(raw_comp, dict) else raw_comp
             # ✅ Normalize component type in heuristic too
             comp_type = self._normalize_component_type(raw_comp_type)
             

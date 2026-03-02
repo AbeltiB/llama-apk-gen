@@ -386,6 +386,9 @@ class BlocklyGenerator:
                 # Validate basic structure
                 if not isinstance(blockly_data, dict):
                     raise BlocklyGenerationError(f"LLM response is not a dict: {type(blockly_data)}")
+
+                if not self._has_meaningful_logic(blockly_data):
+                    raise BlocklyGenerationError("LLM returned empty Blockly logic")
                 
                 # Build metadata
                 metadata = {
@@ -426,6 +429,23 @@ class BlocklyGenerator:
         
         raise BlocklyGenerationError(f"All retries failed: {last_error}")
     
+    def _has_meaningful_logic(self, blockly_data: Dict[str, Any]) -> bool:
+        """Return True when blockly payload has at least one actionable block."""
+        if not isinstance(blockly_data, dict):
+            return False
+
+        workspace_blocks = blockly_data.get('workspace', {}).get('blocks', [])
+        nested_blocks = blockly_data.get('blocks', {}).get('blocks', [])
+        custom_blocks = blockly_data.get('custom_blocks', [])
+
+        if isinstance(workspace_blocks, list) and len(workspace_blocks) > 0:
+            return True
+        if isinstance(nested_blocks, list) and len(nested_blocks) > 0:
+            return True
+        if isinstance(custom_blocks, list) and len(custom_blocks) > 0:
+            return True
+        return False
+
     async def _robust_parse_blockly_json(self, response_text: str) -> Dict[str, Any]:
         """
         🔧 FIXED: Robust JSON parsing for Blockly with multiple fallback strategies
@@ -748,7 +768,7 @@ class BlocklyGenerator:
                 'x': 20,
                 'y': 300,
                 'fields': {
-                    'SCREEN': architecture.screens[0].screen_id if architecture.screens else 'home'
+                    'SCREEN': (architecture.screens[0].id if architecture.screens and hasattr(architecture.screens[0], 'id') else 'home')
                 }
             }
             blocks.append(nav_block)
