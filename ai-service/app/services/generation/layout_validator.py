@@ -15,6 +15,7 @@ from app.config import settings
 from app.models.schemas.layout import EnhancedLayoutDefinition
 from app.models.schemas.components import EnhancedComponentDefinition
 from app.models.schemas.core import PropertyValue
+from app.models.schemas.component_catalog import get_interactive_components
 from app.utils.logging import get_logger, log_context
 
 logger = get_logger(__name__)
