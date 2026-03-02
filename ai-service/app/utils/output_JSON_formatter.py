@@ -27,6 +27,14 @@ from app.models.schemas.component_catalog import (
 
 logger = get_logger(__name__)
 
+
+def _sanitize_id(value: str) -> str:
+    if not value:
+        return "id"
+    cleaned = re.sub(r'[^a-zA-Z0-9_]', '_', str(value))
+    cleaned = re.sub(r'_+', '_', cleaned).strip('_')
+    return cleaned or "id"
+
 # Component mapping and imports are sourced from the central component catalog.
 
 # Default style tokens for ideeza theme
@@ -82,7 +90,8 @@ def format_pipeline_output(raw_result: Dict[str, Any]) -> Dict[str, Any]:
             "componentManager": component_manager,
             "uiManager": ui_manager,
             "blocklyManager": blockly_manager,
-            "code": code
+            "code": code,
+            "metadata": metadata,
         }
         
         logger.info("output_formatter.completed", extra={"components_count": len(component_manager.get('components', {}))})
@@ -178,33 +187,67 @@ def _build_state_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any]:
                     "backgroundColor": _extract_prop_value(properties.get('backgroundColor', 'transparent'))
                 })
             
-            app_state[comp_id] = state_entry
+            state_key = f"{_sanitize_id(screen_id)}_{_sanitize_id(comp_id)}"
+            app_state[state_key] = state_entry
     
     return {"appState": app_state}
+
+
+def _get_blockly_blocks(blockly: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """Read Blockly blocks from supported payload shapes."""
+    if not isinstance(blockly, dict):
+        return []
+
+    workspace_blocks = blockly.get('workspace', {}).get('blocks', [])
+    if isinstance(workspace_blocks, list) and workspace_blocks:
+        return workspace_blocks
+
+    nested_blocks = blockly.get('blocks', {}).get('blocks', [])
+    if isinstance(nested_blocks, list):
+        return nested_blocks
+
+    return []
+
+
+
+def _default_function_body(comp_id: str, event_name: str) -> str:
+    """Generate a non-empty default body for event functions."""
+    event = (event_name or '').strip()
+    component = (comp_id or 'component').strip() or 'component'
+
+    if event == 'onPress':
+        return f"sendWebSocketText('{component.lower()}');"
+    if event == 'onCheckedChange':
+        return f"updateAppState('{component}.checked', isChecked);"
+    return f"// TODO: handle {component}.{event}"
+
 
 
 def _build_function_manager(blockly: Dict) -> Dict[str, Any]:
     """Build functionManager section from Blockly blocks"""
     functions = {}
-    
-    blocks = blockly.get('workspace', {}).get('blocks', [])
+
+    blocks = _get_blockly_blocks(blockly)
     for block in blocks:
-        if block.get('type') == 'event' and block.get('event'):
-            comp_id = block.get('component', '')
-            event_name = block.get('event', '')
-            func_name = f"{comp_id}{event_name}"
-            
-            functions[func_name] = {
-                "name": func_name,
-                "parameters": [],
-                "returnType": "void",
-                "body": "",  # Will be populated from blockly code
-                "triggers": [{
-                    "component": comp_id,
-                    "event": event_name
-                }]
-            }
-    
+        block_type = block.get('type')
+        comp_id = block.get('component') or block.get('fields', {}).get('COMPONENT', '')
+        event_name = block.get('event') or block.get('fields', {}).get('EVENT', '')
+
+        if block_type not in {'event', 'component_event'} or not event_name:
+            continue
+
+        func_name = f"{comp_id}{event_name}"
+        functions[func_name] = {
+            "name": func_name,
+            "parameters": [],
+            "returnType": "void",
+            "body": _default_function_body(comp_id, event_name),
+            "triggers": [{
+                "component": comp_id,
+                "event": event_name
+            }]
+        }
+
     return {"functions": functions}
 
 
@@ -497,6 +540,20 @@ def _generate_react_code(architecture: Dict, layouts: Dict, blockly: Dict, funct
             </Switch>
             <Label paddingLeft={{"$2"}}>{_extract_prop_value(properties.get('label', 'Switch'))}</Label>
         </XStack>'''
+                component_jsx.append(jsx)
+            elif ideeza_type == 'List':
+                items = _extract_prop_value(properties.get('items', ['Item 1', 'Item 2']))
+                if not isinstance(items, list):
+                    items = [items]
+                list_items = '\n'.join(
+                    [f'            <Text key=\"{comp_id}_{idx}\" fontSize={{"$4"}} color={{"$primary"}}>• {item}</Text>' for idx, item in enumerate(items)]
+                )
+                jsx = f'''        <YStack
+            style={{ position: "absolute", top: {style_value.get('top', 0)}, left: {style_value.get('left', 0)}, width: {style_value.get('width', 280)}, minHeight: {style_value.get('height', 120)} }}
+            gap={{"$2"}}
+        >
+{list_items}
+        </YStack>'''
                 component_jsx.append(jsx)
     
     # Build function declarations

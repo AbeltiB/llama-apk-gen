@@ -6,6 +6,7 @@ import logging
 from typing import List, Optional, Dict, Any
 import asyncio
 from datetime import datetime
+from urllib.parse import urlparse
 
 from openai import AsyncOpenAI, APIStatusError, APITimeoutError, RateLimitError, AuthenticationError
 
@@ -16,11 +17,26 @@ logger = logging.getLogger(__name__)
 
 class Llama3Provider(BaseLLMProvider):
 
+    @staticmethod
+    def _normalize_api_url(api_url: str) -> str:
+        """Ensure provider URL includes a valid protocol and path structure."""
+        if not api_url:
+            return "https://fastchat.ideeza.com/v1/chat/completions"
+
+        normalized = api_url.strip()
+        parsed = urlparse(normalized)
+        if not parsed.scheme:
+            normalized = f"https://{normalized.lstrip('/')}"
+
+        return normalized
+
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.provider_name = LLMProvider.LLAMA3
 
-        self.api_url = config.get("llama3_api_url", "https://fastchat.ideeza.com/v1/chat/completions")
+        self.api_url = self._normalize_api_url(
+            config.get("llama3_api_url", "https://fastchat.ideeza.com/v1/chat/completions")
+        )
         self.model = config.get("llama3_model", "llama-3")
         self.api_key = config.get("llama3_api_key")
 
