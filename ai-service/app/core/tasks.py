@@ -91,6 +91,12 @@ def generate_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             db_saved = loop.run_until_complete(save_results_direct(request, result))
             if not db_saved:
                 logger.warning("⚠️ Database persistence failed", extra={"task_id": request.task_id})
+                result.setdefault("metadata", {}).setdefault("warnings", []).append(
+                    {
+                        "type": "database_persistence",
+                        "message": "Failed to save results to database; result is available from cache.",
+                    }
+                )
 
             # Build converted output for API consumers
             formatted_result = format_pipeline_output(result)
