@@ -15,6 +15,7 @@ from app.config import settings
 from app.models.schemas.layout import EnhancedLayoutDefinition
 from app.models.schemas.components import EnhancedComponentDefinition
 from app.models.schemas.core import PropertyValue
+from app.models.schemas.component_catalog import get_interactive_components
 from app.utils.logging import get_logger, log_context
 
 logger = get_logger(__name__)
@@ -237,8 +238,15 @@ class LayoutValidator:
     ) -> None:
         """Validate touch target sizes meet minimum requirements"""
         
-        interactive_types = set(get_interactive_components())
-        
+        try:
+            interactive_types = set(get_interactive_components())
+        except Exception as e:
+            logger.warning(
+                "layout.validation.interactive_component_lookup_failed",
+                extra={"error": str(e), "error_type": type(e).__name__}
+            )
+            interactive_types = set()
+
         for component in layout.components:
             if component.component_type not in interactive_types:
                 continue

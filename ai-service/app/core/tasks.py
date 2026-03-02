@@ -91,6 +91,12 @@ def generate_task(self, payload: Dict[str, Any]) -> Dict[str, Any]:
             db_saved = loop.run_until_complete(save_results_direct(request, result))
             if not db_saved:
                 logger.warning("⚠️ Database persistence failed", extra={"task_id": request.task_id})
+                result.setdefault("metadata", {}).setdefault("warnings", []).append(
+                    {
+                        "type": "database_persistence",
+                        "message": "Failed to save results to database; result is available from cache.",
+                    }
+                )
 
             # Build converted output for API consumers
             formatted_result = format_pipeline_output(result)
@@ -217,13 +223,18 @@ async def disconnect_services():
 
 
 async def save_results_direct(request: AIRequest, result: Dict[str, Any]) -> bool:
-    """
-    Save generation results to database DIRECTLY.
-    """
+    """Save generation results to database directly with stage-level diagnostics."""
+    metadata = result.get("metadata", {})
+
+    shape_summary = {
+        "architecture_type": type(result.get("architecture", {})).__name__,
+        "layout_type": type(result.get("layout", {})).__name__,
+        "blockly_type": type(result.get("blockly", {})).__name__,
+        "layout_count": len(result.get("layout", {})) if isinstance(result.get("layout", {}), dict) else 0,
+        "cache_hit": metadata.get("cache_hit", False),
+    }
+
     try:
-        metadata = result.get("metadata", {})
-        
-        # Save project
         project_id = await db_manager.save_project(
             user_id=request.user_id,
             project_name=f"Generated_{request.task_id[:8]}",
@@ -231,27 +242,38 @@ async def save_results_direct(request: AIRequest, result: Dict[str, Any]) -> boo
             layout=result.get("layout", {}),
             blockly=result.get("blockly", {}),
         )
-        
         logger.info(
-            f"💾 Project saved",
+            "💾 Project saved",
             extra={
                 "db_project_id": project_id,
-                "cache_hit": metadata.get("cache_hit", False),
                 "has_errors": len(metadata.get("errors", [])) > 0,
-            }
+                **shape_summary,
+            },
         )
-        
-        # Save conversation
+    except Exception as e:
+        logger.error(
+            "❌ Failed to save project to database",
+            extra={
+                "task_id": request.task_id,
+                "error": str(e),
+                "error_type": type(e).__name__,
+                **shape_summary,
+            },
+            exc_info=True,
+        )
+        return False
+
+    try:
         conversation_id = await db_manager.save_conversation(
             user_id=request.user_id,
             session_id=request.session_id,
             messages=[
                 {
-                    "role": "user", 
+                    "role": "user",
                     "content": request.prompt,
                     "metadata": {
                         "task_id": request.task_id,
-                    }
+                    },
                 },
                 {
                     "role": "assistant",
@@ -262,21 +284,20 @@ async def save_results_direct(request: AIRequest, result: Dict[str, Any]) -> boo
                         "total_time_ms": metadata.get("total_time_ms", 0),
                     },
                 },
-            ]
+            ],
         )
-        
-        logger.info(f"💬 Conversation saved: {conversation_id}")
+        logger.info("💬 Conversation saved", extra={"conversation_id": conversation_id, "task_id": request.task_id})
         return True
-        
     except Exception as e:
         logger.error(
-            f"❌ Failed to save results to database",
+            "❌ Failed to save conversation to database",
             extra={
                 "task_id": request.task_id,
                 "error": str(e),
                 "error_type": type(e).__name__,
+                "session_id": request.session_id,
             },
-            exc_info=True
+            exc_info=True,
         )
         return False
 
