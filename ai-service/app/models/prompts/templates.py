@@ -113,6 +113,8 @@ Output schema (MUST MATCH EXACTLY):
 Rules:
 - ONLY use allowed components
 - Screens must be minimal and focused
+- Screen IDs must use only letters, numbers, and underscores
+- Example screen IDs: home_screen, create_note_screen
 """,
         user_template="""
 User request:
@@ -166,6 +168,7 @@ Output schema:
 Rules:
 - Touch targets >= 44px height
 - No unsupported components
+- Use IDs with only letters, numbers, and underscores for screen_id and component_id
 """,
         user_template="""
 App purpose:

@@ -27,6 +27,14 @@ from app.models.schemas.component_catalog import (
 
 logger = get_logger(__name__)
 
+
+def _sanitize_id(value: str) -> str:
+    if not value:
+        return "id"
+    cleaned = re.sub(r'[^a-zA-Z0-9_]', '_', str(value))
+    cleaned = re.sub(r'_+', '_', cleaned).strip('_')
+    return cleaned or "id"
+
 # Component mapping and imports are sourced from the central component catalog.
 
 # Default style tokens for ideeza theme
@@ -179,7 +187,8 @@ def _build_state_manager(architecture: Dict, layouts: Dict) -> Dict[str, Any]:
                     "backgroundColor": _extract_prop_value(properties.get('backgroundColor', 'transparent'))
                 })
             
-            app_state[comp_id] = state_entry
+            state_key = f"{_sanitize_id(screen_id)}_{_sanitize_id(comp_id)}"
+            app_state[state_key] = state_entry
     
     return {"appState": app_state}
 

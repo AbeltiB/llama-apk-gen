@@ -110,6 +110,23 @@ class LayoutGenerator:
             }
         )
     
+    @staticmethod
+    def sanitize_id(id_str: str) -> str:
+        """Convert hyphenated/space IDs to underscore format."""
+        if not id_str:
+            return "unnamed"
+        sanitized = re.sub(r'[^a-zA-Z0-9_]', '_', str(id_str))
+        sanitized = re.sub(r'_+', '_', sanitized).strip('_')
+        return sanitized or "unnamed"
+
+    def _build_component_id(self, screen_id: str, index: int, provided_id: Optional[str] = None) -> str:
+        """Build a deterministic component id that is unique per screen."""
+        safe_screen = self.sanitize_id(screen_id)
+        if provided_id:
+            safe_provided = self.sanitize_id(provided_id)
+            return f"{safe_screen}_{safe_provided}_{index}"
+        return f"comp_{safe_screen}_{index}_{safe_screen[:8]}"
+
     def _normalize_component_type(self, component_type: str) -> str:
         """
         ✅ FIX #3: Normalize component type to match available types
@@ -200,7 +217,9 @@ class LayoutGenerator:
         if not screen:
             raise LayoutGenerationError(f"Screen '{screen_id}' not found in architecture")
         
-        with log_context(operation="layout_generation", screen_id=screen_id):
+        safe_screen_id = self.sanitize_id(screen_id)
+
+        with log_context(operation="layout_generation", screen_id=safe_screen_id):
             logger.info(
                 f"📐 layout.generation.started",
                 extra={
@@ -281,7 +300,7 @@ class LayoutGenerator:
             
             # Create layout definition
             layout = EnhancedLayoutDefinition(
-                screen_id=screen_id,
+                screen_id=safe_screen_id,
                 canvas=self._get_default_canvas(),
                 components=components,
                 layout_metadata=metadata
@@ -304,8 +323,20 @@ class LayoutGenerator:
                             "warnings": warning_count
                         }
                     )
-                    # Don't fail - validation warnings are informational
-                
+
+                    # Retry once with sanitized IDs and deduplicated component IDs
+                    retry_layout = self._sanitize_layout_for_validation(layout)
+                    retry_valid, retry_warnings = await layout_validator.validate(retry_layout)
+                    if retry_valid:
+                        layout = retry_layout
+                        warnings = retry_warnings
+                        logger.info("✅ layout.validation.retry_passed", extra={"screen_id": retry_layout.screen_id})
+                    else:
+                        logger.warning(
+                            "⚠️ layout.validation.retry_failed",
+                            extra={"screen_id": retry_layout.screen_id, "warnings": len(retry_warnings)}
+                        )
+
                 logger.info(
                     "✅ layout.validation.completed",
                     extra={
@@ -898,6 +929,24 @@ class LayoutGenerator:
         
         return enhanced_components
     
+    def _sanitize_layout_for_validation(self, layout: EnhancedLayoutDefinition) -> EnhancedLayoutDefinition:
+        """Sanitize screen/component ids and deduplicate component ids before retry validation."""
+        safe_screen_id = self.sanitize_id(layout.screen_id)
+        seen: set[str] = set()
+        sanitized_components: List[EnhancedComponentDefinition] = []
+
+        for idx, component in enumerate(layout.components):
+            base_id = self.sanitize_id(component.component_id)
+            comp_id = base_id
+            suffix = 1
+            while comp_id in seen:
+                suffix += 1
+                comp_id = f"{base_id}_{suffix}"
+            seen.add(comp_id)
+            sanitized_components.append(component.model_copy(update={"component_id": comp_id}))
+
+        return layout.model_copy(update={"screen_id": safe_screen_id, "components": sanitized_components})
+
     async def _generate_heuristic_layout(
         self,
         screen: ScreenDefinition
@@ -926,7 +975,7 @@ class LayoutGenerator:
             width, height = get_component_default_dimensions(comp_type)
             x = (self.canvas_width - width) // 2
             
-            comp_id = f"{comp_type.lower()}_{idx}"
+            comp_id = self._build_component_id(screen.id, idx, f"{comp_type.lower()}")
             
             # Base properties
             properties = {

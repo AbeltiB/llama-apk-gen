@@ -15,6 +15,35 @@ from app.core.database import db_manager
 from app.utils.output_JSON_formatter import format_pipeline_output
 
 
+def _assert_serializable_sections(task_id: str, payload: Dict[str, Any]) -> bool:
+    """Log exactly which payload section fails JSON serialization."""
+    import json
+
+    sections = {
+        "architecture": payload.get("architecture", {}),
+        "layout": payload.get("layout", {}),
+        "blockly": payload.get("blockly", {}),
+    }
+
+    for section_name, section_value in sections.items():
+        try:
+            json.dumps(section_value)
+        except Exception as e:
+            logger.error(
+                "database.serialization.failed",
+                extra={
+                    "task_id": task_id,
+                    "section": section_name,
+                    "error": str(e),
+                    "error_type": type(e).__name__,
+                },
+                exc_info=True,
+            )
+            return False
+
+    return True
+
+
 @celery_app.task(
     name="ai.generate",
     bind=True,
