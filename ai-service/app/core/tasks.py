@@ -263,9 +263,6 @@ async def save_results_direct(request: AIRequest, result: Dict[str, Any]) -> boo
         "cache_hit": metadata.get("cache_hit", False),
     }
 
-    if not _assert_serializable_sections(request.task_id, result):
-        return False
-
     try:
         project_id = await db_manager.save_project(
             user_id=request.user_id,

@@ -239,8 +239,7 @@ class LayoutValidator:
         """Validate touch target sizes meet minimum requirements"""
         
         try:
-            from app.models.schemas.component_catalog import get_interactive_components as _get_interactive_components
-            interactive_types = set(_get_interactive_components())
+            interactive_types = set(get_interactive_components())
         except Exception as e:
             logger.warning(
                 "layout.validation.interactive_component_lookup_failed",

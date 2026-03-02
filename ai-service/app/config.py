@@ -102,7 +102,7 @@ class Settings(BaseSettings):
     redis_semantic_cache_ttl: int = 604800
     redis_session_ttl: int = 28800
     redis_cache_similarity_threshold: float = 0.95
-    semantic_cache_enabled: bool = True
+    semantic_cache_enabled: bool = False
     redis_pool_size: int = 10
     redis_socket_timeout: int = 5
 
