@@ -799,7 +799,7 @@ class LayoutGenerator:
         
         for idx, comp_data in enumerate(components_data):
             try:
-                comp_id = self._build_component_id(screen_id, idx, comp_data.get('id'))
+                comp_id = comp_data.get('id', f"comp_{screen_id}_{idx}")
                 raw_comp_type = (
                     comp_data.get('component_type')
                     or comp_data.get('type')

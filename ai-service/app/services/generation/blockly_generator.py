@@ -825,7 +825,7 @@ class BlocklyGenerator:
                 'x': 20,
                 'y': 300,
                 'fields': {
-                    'SCREEN': (getattr(architecture.screens[0], 'id', 'home') if architecture.screens else 'home')
+                    'SCREEN': (architecture.screens[0].id if architecture.screens and hasattr(architecture.screens[0], 'id') else 'home')
                 }
             }
             blocks.append(nav_block)
