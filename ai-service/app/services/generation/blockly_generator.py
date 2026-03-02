@@ -341,8 +341,8 @@ class BlocklyGenerator:
                 system_prompt, user_prompt = prompts.BLOCKLY_GENERATE.format(
                     architecture=json.dumps(architecture.dict(), indent=2),
                     layout=json.dumps({
-                        screen_id: layout.dict() 
-                        for screen_id, layout in layouts.items()
+                        screen_id: self._layout_to_dict(layout)
+                        for screen_id, layout in (layouts or {}).items()
                     }, indent=2),
                     component_events=json.dumps(component_events, indent=2)
                 )
@@ -678,33 +678,90 @@ class BlocklyGenerator:
             "json_fallback": True
         }
     
+    def _layout_to_dict(self, layout: Any) -> Dict[str, Any]:
+        """Normalize layout object to dict for prompt serialization."""
+        if hasattr(layout, 'model_dump'):
+            return layout.model_dump()
+        if hasattr(layout, 'dict'):
+            return layout.dict()
+        if isinstance(layout, dict):
+            return layout
+        if isinstance(layout, list):
+            return {'components': layout}
+        return {'components': []}
+
+    def _extract_layout_components(self, layout: Any) -> List[Any]:
+        """Read components from layout object/dict/list payloads."""
+        if layout is None:
+            return []
+        if hasattr(layout, 'components'):
+            components = getattr(layout, 'components', [])
+            return components if isinstance(components, list) else []
+        if isinstance(layout, dict):
+            components = layout.get('components', [])
+            return components if isinstance(components, list) else []
+        if isinstance(layout, list):
+            return layout
+        return []
+
+    def _extract_component_event_name(self, component: Any) -> str:
+        """Resolve event name from typed or dict component payloads."""
+        if hasattr(component, 'component_type'):
+            return get_component_event(getattr(component, 'component_type', ''))
+        if isinstance(component, dict):
+            component_type = (
+                component.get('component_type')
+                or component.get('type')
+                or component.get('component')
+                or component.get('name')
+                or ''
+            )
+            return get_component_event(component_type)
+        return ''
+
+    def _extract_component_id(self, component: Any, fallback: str) -> str:
+        """Resolve component id from typed or dict component payloads."""
+        if hasattr(component, 'component_id'):
+            return str(getattr(component, 'component_id', fallback))
+        if isinstance(component, dict):
+            return str(component.get('component_id') or component.get('id') or fallback)
+        return fallback
+
     def _extract_component_events(
         self,
         layouts: Dict[str, EnhancedLayoutDefinition]
     ) -> List[Dict[str, str]]:
-        """Extract component events from layouts"""
-        
-        events = []
-        
-        if not layouts:
+        """Extract component events from layouts."""
+
+        events: List[Dict[str, str]] = []
+
+        if not layouts or not isinstance(layouts, dict):
             return events
-            
+
         for screen_id, layout in layouts.items():
-            if not hasattr(layout, 'components') or not layout.components:
+            components = self._extract_layout_components(layout)
+            if not components:
                 continue
-                
-            for component in layout.components:
-                event_name = get_component_event(component.component_type)
-                if event_name:
-                    events.append({
-                        'screen_id': screen_id,
-                        'component_id': component.component_id,
-                        'component_type': component.component_type,
-                        'event': event_name,
-                    })
-        
+
+            for idx, component in enumerate(components):
+                event_name = self._extract_component_event_name(component)
+                if not event_name:
+                    continue
+
+                component_id = self._extract_component_id(component, fallback=f"comp_{screen_id}_{idx}")
+                events.append({
+                    'screen_id': str(screen_id),
+                    'component_id': component_id,
+                    'component_type': (
+                        getattr(component, 'component_type', None)
+                        if hasattr(component, 'component_type')
+                        else (component.get('component_type') if isinstance(component, dict) else 'unknown')
+                    ) or 'unknown',
+                    'event': event_name,
+                })
+
         return events
-    
+
     async def _generate_heuristic_blockly(
         self,
         architecture: ArchitectureDesign,
