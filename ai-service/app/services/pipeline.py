@@ -17,6 +17,7 @@ All generation uses Llama3 as primary provider with heuristic fallback.
 from sys import exc_info
 import app.api.v1.results
 import time
+import json
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timezone
 
@@ -26,6 +27,7 @@ from app.models.schemas.layout import EnhancedLayoutDefinition
 from app.core.messaging import queue_manager
 from app.core.database import db_manager
 from app.core.cache import cache_manager
+from app.config import settings
 from app.utils.logging import get_logger, log_context
 from app.utils.rate_limiter import rate_limiter
 
@@ -41,6 +43,20 @@ from app.services.generation.cache_manager import semantic_cache
 from app.utils.output_JSON_formatter import format_pipeline_output, validate_output_schema
 
 logger = get_logger(__name__)
+
+
+def _safe_parse_cached_payload(value: Any, section: str) -> Any:
+    """Parse cached payload sections that may be stored as JSON strings."""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except Exception as e:
+            logger.warning(
+                "pipeline.cache.invalid_json",
+                extra={"section": section, "error": str(e), "error_type": type(e).__name__}
+            )
+            return None
+    return value
 
 
 class PipelineStage:
@@ -121,24 +137,27 @@ class CacheCheckStage(PipelineStage):
     
     async def execute(self, request: AIRequest, context: Dict[str, Any]) -> Dict[str, Any]:
         """Check for cached result"""
-        
+
+        cache_enabled = settings.semantic_cache_enabled and not settings.is_development
+        if not cache_enabled:
+            logger.info(
+                "pipeline.cache.disabled",
+                extra={"task_id": request.task_id, "environment": settings.environment}
+            )
+            context['cache_hit'] = False
+            context['cached_result'] = None
+            return {'cache_hit': False, 'disabled': True}
+
         cached_result = await semantic_cache.get_cached_result(
             prompt=request.prompt,
             user_id=request.user_id
         )
-        
+
         if cached_result:
             logger.info(
                 "pipeline.cache.hit",
                 extra={"task_id": request.task_id}
             )
-
-            if not settings.semantic_cache_enabled:
-                logger.info('pipeline.cache.disabled', extra={'task_id': request.task_id})
-                context['cache_hit'] = False
-                context['cached_result'] = None
-                return {'cache_hit': False, 'disabled': True}
-
             context['cache_hit'] = True
             context['cached_result'] = cached_result.get('result', {})
             return {'cache_hit': True, 'result': cached_result}
@@ -288,7 +307,7 @@ class ArchitectureGenerationStage(PipelineStage):
         # Skip if cache hit
         if context.get('cache_hit'):
             cached = context.get('cached_result', {})
-            architecture_data = cached.get('architecture')
+            architecture_data = _safe_parse_cached_payload(cached.get('architecture'), 'architecture')
             
             if architecture_data:
                 # Try to parse as ArchitectureDesign
@@ -375,7 +394,7 @@ class LayoutGenerationStage(PipelineStage):
         # Skip if cache hit
         if context.get('cache_hit'):
             cached = context.get('cached_result', {})
-            layouts_data = cached.get('layout', {})
+            layouts_data = _safe_parse_cached_payload(cached.get('layout', {}), 'layout') or {}
             
             if layouts_data:
                 # Convert to EnhancedLayoutDefinition objects
@@ -483,12 +502,18 @@ class BlocklyGenerationStage(PipelineStage):
         # Skip if cache hit
         if context.get('cache_hit'):
             cached = context.get('cached_result', {})
-            blockly_data = cached.get('blockly')
+            blockly_data = _safe_parse_cached_payload(cached.get('blockly'), 'blockly')
             
             if blockly_data:
-                context['blockly'] = blockly_data
-                logger.info("pipeline.blockly.from_cache")
-                return {"skipped": True, "reason": "cache_hit", "from_cache": True}
+                if isinstance(blockly_data, dict):
+                    has_blocks = bool(blockly_data.get('workspace', {}).get('blocks') or blockly_data.get('blocks', {}).get('blocks'))
+                    if not has_blocks:
+                        logger.warning('pipeline.blockly.cache_empty_logic')
+                        context['cache_hit'] = False
+                    else:
+                        context['blockly'] = blockly_data
+                        logger.info("pipeline.blockly.from_cache")
+                        return {"skipped": True, "reason": "cache_hit", "from_cache": True}
         
         architecture = context.get('architecture')
         layouts = context.get('layouts', {})
@@ -595,6 +620,14 @@ class CacheSaveStage(PipelineStage):
     
     async def execute(self, request: AIRequest, context: Dict[str, Any]) -> Dict[str, Any]:
         """Save result to semantic cache"""
+
+        cache_enabled = settings.semantic_cache_enabled and not settings.is_development
+        if not cache_enabled:
+            logger.info(
+                "pipeline.cache_save.disabled",
+                extra={"task_id": request.task_id, "environment": settings.environment}
+            )
+            return {"skipped": True, "reason": "cache_disabled"}
         
         # Skip if already from cache
         if context.get('cache_hit'):

@@ -194,6 +194,22 @@ COMPONENT_DEFINITIONS: Dict[str, ComponentDefinition] = {
             "type": {"type": "string", "required": False},
         },
     },
+    "List": {
+        "id": "core.list",
+        "name": "List",
+        "category": "display",
+        "output_type": "List",
+        "aliases": ["TodoList", "FlatList"],
+        "required_imports": [
+            {"name": "YStack", "source": "tamagui"},
+            {"name": "Text", "source": "tamagui"},
+        ],
+        "schema": {
+            "items": {"type": "array", "required": False},
+            "value": {"type": "string", "required": False},
+            "style": {"type": "object", "required": False},
+        },
+    },
     "TextArea": {
         "id": "core.text_area",
         "name": "TextArea",
@@ -224,6 +240,7 @@ COMPONENT_DEFAULT_DIMENSIONS: Dict[str, Tuple[int, int]] = {
     "Map": (320, 220),
     "Chart": (320, 220),
     "TextArea": (280, 100),
+    "List": (280, 180),
 }
 
 COMPONENT_DEFAULT_PROPERTIES: Dict[str, Dict[str, Any]] = {
@@ -242,6 +259,7 @@ COMPONENT_DEFAULT_PROPERTIES: Dict[str, Dict[str, Any]] = {
     "Map": {},
     "Chart": {"type": "line", "data": []},
     "TextArea": {"value": "", "placeholder": "Enter details"},
+    "List": {"items": ["Item 1", "Item 2"]},
 }
 
 COMPONENT_EVENT_BY_TYPE: Dict[str, str] = {
