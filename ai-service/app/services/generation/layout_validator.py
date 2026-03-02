@@ -238,8 +238,15 @@ class LayoutValidator:
     ) -> None:
         """Validate touch target sizes meet minimum requirements"""
         
-        interactive_types = set(get_interactive_components())
-        
+        try:
+            interactive_types = set(get_interactive_components())
+        except Exception as e:
+            logger.warning(
+                "layout.validation.interactive_component_lookup_failed",
+                extra={"error": str(e), "error_type": type(e).__name__}
+            )
+            interactive_types = set()
+
         for component in layout.components:
             if component.component_type not in interactive_types:
                 continue

@@ -26,6 +26,7 @@ from app.models.schemas.layout import EnhancedLayoutDefinition
 from app.core.messaging import queue_manager
 from app.core.database import db_manager
 from app.core.cache import cache_manager
+from app.config import settings
 from app.utils.logging import get_logger, log_context
 from app.utils.rate_limiter import rate_limiter
 
@@ -121,24 +122,27 @@ class CacheCheckStage(PipelineStage):
     
     async def execute(self, request: AIRequest, context: Dict[str, Any]) -> Dict[str, Any]:
         """Check for cached result"""
-        
+
+        cache_enabled = settings.semantic_cache_enabled and not settings.is_development
+        if not cache_enabled:
+            logger.info(
+                "pipeline.cache.disabled",
+                extra={"task_id": request.task_id, "environment": settings.environment}
+            )
+            context['cache_hit'] = False
+            context['cached_result'] = None
+            return {'cache_hit': False, 'disabled': True}
+
         cached_result = await semantic_cache.get_cached_result(
             prompt=request.prompt,
             user_id=request.user_id
         )
-        
+
         if cached_result:
             logger.info(
                 "pipeline.cache.hit",
                 extra={"task_id": request.task_id}
             )
-
-            if not settings.semantic_cache_enabled:
-                logger.info('pipeline.cache.disabled', extra={'task_id': request.task_id})
-                context['cache_hit'] = False
-                context['cached_result'] = None
-                return {'cache_hit': False, 'disabled': True}
-
             context['cache_hit'] = True
             context['cached_result'] = cached_result.get('result', {})
             return {'cache_hit': True, 'result': cached_result}
@@ -595,6 +599,14 @@ class CacheSaveStage(PipelineStage):
     
     async def execute(self, request: AIRequest, context: Dict[str, Any]) -> Dict[str, Any]:
         """Save result to semantic cache"""
+
+        cache_enabled = settings.semantic_cache_enabled and not settings.is_development
+        if not cache_enabled:
+            logger.info(
+                "pipeline.cache_save.disabled",
+                extra={"task_id": request.task_id, "environment": settings.environment}
+            )
+            return {"skipped": True, "reason": "cache_disabled"}
         
         # Skip if already from cache
         if context.get('cache_hit'):
