@@ -13,6 +13,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import uuid
 import time
+import httpx
+from urllib.parse import urlparse
 
 from app.config import settings
 from app.core.cache import cache_manager
@@ -28,6 +30,17 @@ from app.utils.logging import get_logger, log_context
 from app.api.v1 import health, generate
 
 logger = get_logger(__name__)
+
+
+async def _check_external_service_connectivity() -> None:
+    """Best-effort startup check for configured external services."""
+    parsed = urlparse(settings.llama3_api_url)
+    base_url = f"{parsed.scheme}://{parsed.netloc}"
+
+    timeout = min(float(settings.llama3_timeout), 10.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        response = await client.get(base_url)
+        response.raise_for_status()
 
 
 # ============================================================================
@@ -66,6 +79,18 @@ async def lifespan(app: FastAPI):
             logger.info("app.startup.postgresql.connected")
         except Exception as e:
             logger.critical("app.startup.postgresql.failed", exc_info=e)
+            raise
+
+        # External service health checks (fail fast for critical dependencies)
+        try:
+            await _check_external_service_connectivity()
+            logger.info("app.startup.external_services.connected", extra={"llm_endpoint": settings.llama3_api_url})
+        except Exception as e:
+            logger.critical(
+                "app.startup.external_services.failed",
+                extra={"llm_endpoint": settings.llama3_api_url, "error": str(e)},
+                exc_info=e,
+            )
             raise
         
         logger.info(
