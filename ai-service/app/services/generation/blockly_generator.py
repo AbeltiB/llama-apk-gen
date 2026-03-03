@@ -243,17 +243,39 @@ class BlocklyGenerator:
                 logger.info("🔍 blockly.validation.starting")
                 
                 try:
+                    parsed_block_count = self._count_workspace_blocks(blockly)
                     is_valid, warnings = await blockly_validator.validate(blockly)
-                    
+
                     error_count = sum(1 for w in warnings if w.level == "error")
                     warning_count = sum(1 for w in warnings if w.level == "warning")
-                    
+                    validated_block_count = self._count_workspace_blocks(blockly)
+
+                    if parsed_block_count > 0 and validated_block_count == 0:
+                        logger.error(
+                            "🚨 blockly.validation.logic_discrepancy",
+                            extra={
+                                "parsed_blocks": parsed_block_count,
+                                "validated_blocks": validated_block_count,
+                                "warnings": [str(w) for w in warnings],
+                            },
+                        )
+
+                    requires_logic = self._requires_interaction_logic(layouts)
+                    if requires_logic and validated_block_count == 0:
+                        logger.error(
+                            "❌ blockly.validation.missing_required_logic",
+                            extra={"requires_logic": True, "validated_blocks": validated_block_count},
+                        )
+                        raise BlocklyGenerationError("Validation rejected Blockly: interactive UI requires non-empty logic blocks")
+
                     if not is_valid:
                         logger.error(
                             "❌ blockly.validation.failed",
                             extra={
                                 "errors": error_count,
-                                "warnings": warning_count
+                                "warnings": warning_count,
+                                "parsed_blocks": parsed_block_count,
+                                "validated_blocks": validated_block_count,
                             }
                         )
                         # Add validation warnings to metadata
@@ -265,11 +287,15 @@ class BlocklyGenerator:
                             extra={
                                 "warnings": warning_count,
                                 "errors": error_count,
-                                "used_heuristic": used_heuristic
+                                "used_heuristic": used_heuristic,
+                                "parsed_blocks": parsed_block_count,
+                                "validated_blocks": validated_block_count,
                             }
                         )
-                        
+
                 except Exception as validation_error:
+                    if isinstance(validation_error, BlocklyGenerationError):
+                        raise
                     logger.warning(
                         "⚠️ blockly.validation.error",
                         extra={"error": str(validation_error)}
@@ -315,6 +341,24 @@ class BlocklyGenerator:
                 
                 return fallback_blockly
     
+    def _count_workspace_blocks(self, blockly: Dict[str, Any]) -> int:
+        """Count blocks across accepted Blockly payload shapes."""
+        if not isinstance(blockly, dict):
+            return 0
+        nested = blockly.get('blocks', {}).get('blocks', []) if isinstance(blockly.get('blocks'), dict) else []
+        if isinstance(nested, list) and nested:
+            return len(nested)
+        workspace = blockly.get('workspace', {}).get('blocks', []) if isinstance(blockly.get('workspace'), dict) else []
+        return len(workspace) if isinstance(workspace, list) else 0
+
+    def _requires_interaction_logic(self, layouts: Dict[str, EnhancedLayoutDefinition]) -> bool:
+        """Return True when UI has interactive components and should have logic blocks."""
+        for layout in (layouts or {}).values():
+            for comp in getattr(layout, "components", []) or []:
+                if get_component_event(getattr(comp, "type", "")):
+                    return True
+        return False
+
     async def _generate_with_llm(
         self,
         architecture: ArchitectureDesign,

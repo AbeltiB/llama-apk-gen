@@ -4,6 +4,7 @@ LLAMA3 ONLY VERSION - fully corrected for defaults and lists/dicts.
 """
 import logging
 import os
+from urllib.parse import urlparse
 from typing import Literal, Optional, Dict, Any
 from functools import lru_cache
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -209,6 +210,18 @@ class Settings(BaseSettings):
             logger.warning(f"Invalid environment '{v}', defaulting to 'development'")
             return "development"
         return v
+
+    @field_validator('llama3_api_url')
+    @classmethod
+    def validate_llama3_api_url(cls, v: str) -> str:
+        """Require a fully-qualified HTTP(S) URL for external LLM endpoint."""
+        value = (v or "").strip()
+        parsed = urlparse(value)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError(
+                "llama3_api_url must be a full URL (example: https://fastchat.ideeza.com/v1/chat/completions)"
+            )
+        return value
 
     @property
     def is_production(self) -> bool:

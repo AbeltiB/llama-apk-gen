@@ -24,7 +24,7 @@ class BlocklyWarning:
     def to_dict(self) -> Dict[str, str]:
         return {
             'level': self.level,
-            'block_id': block_id,
+            'block_id': self.block_id,
             'message': self.message,
             'suggestion': self.suggestion
         }
@@ -55,6 +55,21 @@ class BlocklyValidator:
         self.block_ids: Set[str] = set()
         self.variable_ids: Set[str] = set()
         self.variable_names: Set[str] = set()
+
+    @staticmethod
+    def _extract_workspace_blocks(blockly: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Extract workspace blocks from either legacy or canonical payload shapes."""
+        blocks_root = blockly.get('blocks', {}) if isinstance(blockly, dict) else {}
+        nested_blocks = blocks_root.get('blocks', []) if isinstance(blocks_root, dict) else []
+        if isinstance(nested_blocks, list) and nested_blocks:
+            return nested_blocks
+
+        workspace = blockly.get('workspace', {}) if isinstance(blockly, dict) else {}
+        workspace_blocks = workspace.get('blocks', []) if isinstance(workspace, dict) else []
+        if isinstance(workspace_blocks, list):
+            return workspace_blocks
+
+        return []
     
     async def validate(
         self,
@@ -77,8 +92,18 @@ class BlocklyValidator:
         logger.info("🔍 Validating Blockly blocks...")
         
         # Extract blocks and variables
-        blocks = blockly.get('blocks', {}).get('blocks', [])
+        blocks = self._extract_workspace_blocks(blockly)
         variables = blockly.get('variables', [])
+
+        workspace_blocks = blockly.get('workspace', {}).get('blocks', []) if isinstance(blockly.get('workspace'), dict) else []
+        nested_blocks = blockly.get('blocks', {}).get('blocks', []) if isinstance(blockly.get('blocks'), dict) else []
+        if isinstance(workspace_blocks, list) and workspace_blocks and (not isinstance(nested_blocks, list) or not nested_blocks):
+            self.warnings.append(BlocklyWarning(
+                level="warning",
+                block_id="root",
+                message="Blockly payload uses workspace.blocks but blocks.blocks is empty",
+                suggestion="Normalize to blocks.blocks to avoid downstream block loss"
+            ))
         
         # Collect IDs first
         await self._collect_ids(blocks, variables)
@@ -141,19 +166,22 @@ class BlocklyValidator:
     
     async def _validate_structure(self, blockly: Dict[str, Any]) -> None:
         """Validate basic structure"""
-        
-        if 'blocks' not in blockly:
+
+        has_blocks_key = 'blocks' in blockly
+        has_workspace_key = isinstance(blockly.get('workspace'), dict)
+
+        if not has_blocks_key and not has_workspace_key:
             self.warnings.append(BlocklyWarning(
                 level="error",
                 block_id="root",
-                message="Missing 'blocks' key",
+                message="Missing 'blocks' and 'workspace' keys",
                 suggestion="Add blocks workspace structure"
             ))
             return
-        
-        blocks_obj = blockly['blocks']
-        
-        if not isinstance(blocks_obj, dict):
+
+        blocks_obj = blockly.get('blocks', {'blocks': []})
+
+        if has_blocks_key and not isinstance(blocks_obj, dict):
             self.warnings.append(BlocklyWarning(
                 level="error",
                 block_id="root",
@@ -161,15 +189,19 @@ class BlocklyValidator:
                 suggestion="Use {languageVersion: 0, blocks: [...]}"
             ))
             return
-        
-        if 'blocks' not in blocks_obj:
+
+        has_nested_blocks = isinstance(blocks_obj.get('blocks'), list)
+        workspace = blockly.get('workspace', {}) if isinstance(blockly, dict) else {}
+        has_workspace_blocks = isinstance(workspace, dict) and isinstance(workspace.get('blocks'), list)
+
+        if not has_nested_blocks and not has_workspace_blocks:
             self.warnings.append(BlocklyWarning(
                 level="warning",
                 block_id="root",
                 message="No blocks array in workspace",
                 suggestion="Add blocks array"
             ))
-    
+
     async def _validate_blocks(self, blocks: List[Dict[str, Any]]) -> None:
         """Validate individual blocks"""
         

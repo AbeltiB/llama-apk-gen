@@ -555,6 +555,9 @@ class BlocklyGenerationStage(PipelineStage):
             # Safe access to nested structures with defaults
             blocks_dict = blockly.get('blocks', {})
             blocks_list = blocks_dict.get('blocks', []) if isinstance(blocks_dict, dict) else []
+            if not blocks_list and isinstance(blockly.get('workspace'), dict):
+                workspace_blocks = blockly.get('workspace', {}).get('blocks', [])
+                blocks_list = workspace_blocks if isinstance(workspace_blocks, list) else []
             variables_list = blockly.get('variables', []) if isinstance(blockly.get('variables'), list) else []
             
             block_count = len(blocks_list)
